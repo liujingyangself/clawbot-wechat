@@ -439,6 +439,14 @@ configure_agent() {
     "{\"api\":\"google-generative-ai\",\"baseUrl\":\"https://generativelanguage.googleapis.com/v1beta\",\"models\":[{\"id\":\"$m\",\"name\":\"$m\",\"api\":\"google-generative-ai\",\"input\":[\"text\"],\"contextWindow\":1000000,\"contextTokens\":200000,\"maxTokens\":8192,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0}}]}" \
     --strict-json --merge >>"$LOG" 2>&1 || true
   openclaw config set agents.defaults.model.primary "google/$m" >>"$LOG" 2>&1 || true
+  # 关掉定期心跳。OpenClaw 默认每 30 分钟跑一次「后台自检」的 agent 轮次，
+  # 并把结果主动发到使用者微信。对我们这个场景有两个问题：
+  #   1. 非技术使用者会收到一串看不懂的英文提醒，里面还带命令行，像是坏了
+  #   2. 每轮都是一次真实的模型调用 —— 一天 48 次。Gemini 免费档一天可能
+  #      就几十次，光心跳就能把额度吃光，然后使用者发消息时反而 429
+  # 注意：官方说的禁用方式是 every=0m。只设 target=none 不够——那只是不发
+  # 消息，agent 轮次照跑，额度照花。
+  openclaw config set agents.defaults.heartbeat.every '"0m"' >>"$LOG" 2>&1 || true
   openclaw config set memory.search.enabled false >>"$LOG" 2>&1 || true
 
   # 只有本人能用；群里不说话
