@@ -43,99 +43,55 @@ try {
   if ($env:TERM_PROGRAM -eq 'vscode' -and -not [Console]::IsOutputRedirected) { $script:RealConsole = $true }
 } catch { $script:Interactive = $false; $script:RealConsole = $false }
 
-# 二维码、agy 的登录界面这些必须真人盯着屏幕看。输出被捕获时直接停下来，
-# 告诉使用者怎么自己跑，而不是把二维码画进一个没人看的管道里。
-function Require-RealConsole { param($what)
-  if ($script:RealConsole) { return }
-  Write-Host ''
-  Write-Host ('═' * 64) -Fore Red
-  Write-Host "  这一步（$what）必须由你本人在终端窗口里完成" -Fore Red
-  Write-Host ('═' * 64) -Fore Red
-  Write-Host ''
-  Write-Host '  检测到这个脚本的输出被程序捕获了（多半是 AI 助手在代跑）。'
-  Write-Host '  二维码画出来你也看不到，所以先停在这里。'
-  Write-Host ''
-  Write-Host '  请你本人这样做：' -Fore Yellow
-  Write-Host '    1. 在开始菜单搜索「PowerShell」，打开它'
-  Write-Host '    2. 把下面这两行粘进去，回车：'
-  Write-Host ''
-  Write-Host "       `$env:Path = [Environment]::GetEnvironmentVariable('Path','User') + ';' + `$env:Path" -Fore Cyan
-  Write-Host '       openclaw channels login --channel openclaw-weixin' -Fore Cyan
-  Write-Host ''
-  Write-Host '    3. 用手机微信扫出现的二维码'
-  Write-Host '    4. 扫完回来重新运行一次安装程序，它会接着往下走'
-  Write-Host ''
-  Write-Log "HALT: $what needs a real console"
-  Read-Host '  按回车关闭'
-  exit 2
-}
+# 二维码、agy 的登录界面这些必须真人盯着屏幕看。
+# 但这个安装器的设计目标是「丢给 AI 代理全自动装完，人只辅助扫码」，
+# 所以输出被捕获时**不能停下来让人手动跑**——那等于把活又推回给人。
+# 正确做法：自己弹一个使用者看得见的新窗口来做这一步，跑完自动回到主流程。
+function Invoke-Visible { param($Title, $Command, $Hint)
+  if ($script:RealConsole) {
+    # 已经在真终端里，直接跑就行，不用多开窗口
+    Write-Host ''
+    Write-Host "  $Hint" -Fore Yellow
+    Invoke-Expression $Command
+    return $true
+  }
 
-# MessageBox 不指定父窗口会被丢到别的窗口后面。用一个置顶的隐形窗口当 owner。
-function New-TopmostOwner {
-  $f = New-Object System.Windows.Forms.Form
-  $f.TopMost = $true; $f.ShowInTaskbar = $false
-  $f.StartPosition = 'CenterScreen'; $f.Size = New-Object Drawing.Size(1,1)
-  $f.Opacity = 0
-  $f.Show(); $f.Activate()
-  return $f
-}
-
-function Write-Banner { param($m, $hint)
   Write-Host ''
   Write-Host ('─' * 64) -Fore Yellow
-  Write-Host '  ⚠ 需要你操作' -Fore Yellow
+  Write-Host "  正在弹出一个新窗口：$Title" -Fore Yellow
+  Write-Host "  $Hint"
+  Write-Host '  请在那个新窗口里操作，完成后它会自动回到这里继续。'
   Write-Host ('─' * 64) -Fore Yellow
-  foreach ($line in ($m -split "`n")) { Write-Host "  $line" }
-  if ($hint) { Write-Host ''; Write-Host "  $hint" -Fore Cyan }
-  Write-Host ('─' * 64) -Fore Yellow
-  Write-Log "PROMPT: $($m -replace "`n",' / ')"
-}
+  Write-Log "VISIBLE-STEP: $Title"
 
-function Dlg { param($m)
-  Write-Banner $m '（屏幕上应该还会弹出一个窗口。如果没看到，就在这里按回车继续。）'
-  if ($script:Interactive) {
-    try {
-      $o = New-TopmostOwner
-      [System.Windows.Forms.MessageBox]::Show($o, $m, '微信 AI 助手 安装', 'OK', 'Information') | Out-Null
-      $o.Close(); return
-    } catch { Write-Log "dialog failed: $_" }
+  $inner = @"
+`$host.UI.RawUI.WindowTitle = '$Title'
+`$env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User') + ';' + `$env:Path
+Write-Host ''
+Write-Host '  $Hint' -Fore Yellow
+Write-Host ''
+$Command
+Write-Host ''
+Write-Host '  这一步完成了。' -Fore Green
+Start-Sleep -Seconds 2
+"@
+  $b64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($inner))
+  try {
+    $proc = Start-Process -FilePath 'powershell.exe' `
+      -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$b64 `
+      -PassThru -WindowStyle Normal -ErrorAction Stop
+  } catch {
+    ER "弹不出新窗口：$($_.Exception.Message)"
+    return $false
   }
-  Read-Host '  按回车继续'
-}
-
-function AskYesNo { param($m)
-  Write-Banner $m '（屏幕上应该还会弹出一个窗口。没看到的话，在这里输入 y 或 n。）'
-  if ($script:Interactive) {
-    try {
-      $o = New-TopmostOwner
-      $r = [System.Windows.Forms.MessageBox]::Show($o, $m, '微信 AI 助手 安装', 'YesNo', 'Question')
-      $o.Close(); return ($r -eq 'Yes')
-    } catch { Write-Log "dialog failed: $_" }
+  # 最多等 15 分钟（扫码二维码本身约 8 分钟就过期）
+  if (-not $proc.WaitForExit(900000)) {
+    try { $proc.Kill() } catch {}
+    Warn "$Title 超时了"
+    return $false
   }
-  return ((Read-Host '  要继续吗？(y/n)') -match '^[yY]')
+  return $true
 }
-
-function AskText { param($m)
-  Write-Banner $m '（屏幕上应该还会弹出一个输入框。没看到的话，直接在这里输入。）'
-  if ($script:Interactive) {
-    try {
-      $o = New-TopmostOwner
-      $v = [Microsoft.VisualBasic.Interaction]::InputBox($m, '微信 AI 助手 安装', '')
-      $o.Close()
-      if ($v) { return $v }
-    } catch { Write-Log "inputbox failed: $_" }
-  }
-  return (Read-Host '  请输入')
-}
-
-function Refresh-Path {
-  $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' +
-              [Environment]::GetEnvironmentVariable('Path','User')
-  foreach ($p in @("$env:USERPROFILE\.local\bin", "$env:LOCALAPPDATA\Programs")) {
-    if ((Test-Path $p) -and ($env:Path -notlike "*$p*")) { $env:Path = "$p;$env:Path" }
-  }
-}
-function Has { param($c) [bool](Get-Command $c -ErrorAction SilentlyContinue) }
 
 function Banner {
   Clear-Host
@@ -430,7 +386,6 @@ function Install-Agy {
   if ((Test-Path $settings) -and ((Get-Content $settings -Raw) -match '"permissions"')) {
     OK '已经登录并配置过了'
   } else {
-    Require-RealConsole 'Antigravity 登录'
     Dlg @"
 现在装助手的主力大脑：Antigravity。
 
@@ -447,7 +402,8 @@ function Install-Agy {
 
 整个过程大约 2 分钟。
 "@
-    agy
+    Invoke-Visible 'Antigravity 登录' 'agy' `
+      '回车选配色 → 空格取消勾选分享数据 → 回车 → 选浏览器登录 → 看到 > 输入框后敲 /quit' | Out-Null
 
     # 必须确认登录真的成功了。之前的版本跑完 agy 就往下走，
     # 结果使用者在被捕获的环境里根本没完成登录，却一路显示「装好了」。
@@ -455,8 +411,9 @@ function Install-Agy {
     while ((-not (Test-Path $settings)) -and $tries -lt 2) {
       $tries++
       Warn '没有检测到登录成功的痕迹'
-      if (AskYesNo "看起来 Antigravity 还没登录成功。`n`n没有它，助手每天只能回二十来条消息就会停。`n`n要再试一次吗？`n`n• 是 → 再打开一次登录界面`n• 否 → 先这样，以后在 PowerShell 里敲 agy 也能补上") {
-        agy
+      if (AskYesNo "看起来 Antigravity 还没登录成功。`n`n没有它，助手每天只能回二十来条消息就会停。`n`n要再试一次吗？`n`n• 是 → 再弹一次登录窗口`n• 否 → 先这样，以后重跑一次安装程序也能补上") {
+        Invoke-Visible 'Antigravity 登录（重试）' 'agy' `
+          '回车选配色 → 空格取消分享数据 → 回车 → 浏览器登录 → 敲 /quit 退出' | Out-Null
       } else { break }
     }
     if (Test-Path $settings) { OK 'Antigravity 登录成功' }
@@ -508,7 +465,6 @@ function Login-WeChat {
   if ((openclaw channels status 2>$null | Out-String) -match 'openclaw-weixin.*running') {
     OK '微信已经连上了'; return
   }
-  Require-RealConsole '微信扫码'
   Dlg @"
 最后一步：连接微信。
 
@@ -520,7 +476,8 @@ function Login-WeChat {
 
 二维码有效期约 8 分钟，扫不上可以重新运行安装程序。
 "@
-  openclaw channels login --channel openclaw-weixin
+  Invoke-Visible '微信扫码登录' 'openclaw channels login --channel openclaw-weixin' `
+    '请用手机微信「扫一扫」扫下面的二维码，然后在手机上确认' | Out-Null
   Start-Sleep -Seconds 3
   if ((openclaw channels status 2>$null | Out-String) -match 'openclaw-weixin') {
     OK '微信连上了'

@@ -32,88 +32,50 @@ REAL_CONSOLE=1
 # 它们会进到调用方（比如 AI 代理）的缓冲区里。
 [[ -t 1 && -t 0 ]] || REAL_CONSOLE=0
 
-# 二维码、agy 的登录界面这些必须真人盯着屏幕看。输出被捕获时直接停下来，
-# 告诉使用者怎么自己跑，而不是把二维码画进一个没人看的管道里。
-require_real_console() {  # require_real_console <这一步叫什么> <让他自己跑的命令>
-  (( REAL_CONSOLE )) && return 0
-  printf '\n%s%s%s\n' "$R" "$(printf '═%.0s' $(seq 1 60))" "$N"
-  printf '%s  这一步（%s）必须由你本人在终端窗口里完成%s\n' "$R$B" "$1" "$N"
-  printf '%s%s%s\n\n' "$R" "$(printf '═%.0s' $(seq 1 60))" "$N"
-  echo "  检测到这个脚本的输出被程序捕获了（多半是 AI 助手在代跑）。"
-  echo "  二维码画出来你也看不到，所以先停在这里。"
-  echo
-  printf '%s  请你本人这样做：%s\n' "$Y" "$N"
-  echo "    1. 打开「终端」App（Command + 空格，输入「终端」回车）"
-  echo "    2. 把下面这行粘进去，回车："
-  echo
-  printf '%s       %s%s\n' "$G" "$2" "$N"
-  echo
-  echo "    3. 照屏幕提示完成"
-  echo "    4. 完成后重新运行一次安装程序，它会接着往下走"
-  echo
-  log "HALT: $1 needs a real console"
-  exit 2
-}
+# 二维码、agy 的登录界面这些必须真人盯着屏幕看。
+# 但这个安装器的设计目标是「丢给 AI 代理全自动装完，人只辅助扫码」，
+# 所以输出被捕获时**不能停下来让人手动跑**——那等于把活又推回给人。
+# 正确做法：自己弹一个使用者看得见的 Terminal 窗口来做这一步，跑完自动回到主流程。
+run_visible() {  # run_visible <标题> <命令> <提示>
+  if (( REAL_CONSOLE )); then
+    printf '\n%s  %s%s\n\n' "$Y" "$3" "$N"
+    eval "$2"
+    return 0
+  fi
 
-esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
-
-banner_prompt() {  # banner_prompt <正文> <提示行>
   printf '\n%s%s%s\n' "$Y" "$(printf '─%.0s' $(seq 1 60))" "$N"
-  printf '%s  ⚠ 需要你操作%s\n' "$Y$B" "$N"
+  printf '%s  正在弹出一个新窗口：%s%s\n' "$Y$B" "$1" "$N"
+  printf '  %s\n' "$3"
+  echo   "  请在那个新窗口里操作，完成后会自动回到这里继续。"
   printf '%s%s%s\n' "$Y" "$(printf '─%.0s' $(seq 1 60))" "$N"
-  printf '%s\n' "$1" | while IFS= read -r l; do printf '  %s\n' "$l"; done
-  [[ -n "${2:-}" ]] && printf '\n%s  %s%s\n' "$G" "$2" "$N"
-  printf '%s%s%s\n' "$Y" "$(printf '─%.0s' $(seq 1 60))" "$N"
-  log "PROMPT: $(printf '%s' "$1" | tr '\n' ' ')"
-}
+  log "VISIBLE-STEP: $1"
 
-dialog() {  # dialog <正文>
-  banner_prompt "$1" "（屏幕上应该还会弹出一个窗口。没看到的话，在这里按回车继续。）"
-  if (( INTERACTIVE )); then
-    osascript -e "display dialog \"$(esc "$1")\" buttons {\"知道了\"} \
-      default button \"知道了\" with title \"微信 AI 助手 安装\"" >/dev/null 2>&1 && return 0
-  fi
-  read -r -p "  按回车继续 " _ || true
-}
+  local tag done_f script
+  tag="$$-$(date +%s)"
+  done_f="/tmp/clawbot-step-$tag.done"
+  script="/tmp/clawbot-step-$tag.sh"
+  {
+    echo '#!/bin/bash'
+    echo 'export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"'
+    printf 'printf "\\n  %%s\\n\\n" %s\n' "$(printf '%q' "$3")"
+    printf '%s\n' "$2"
+    echo 'printf "\n  这一步完成了。\n"'
+    echo 'sleep 2'
+    printf 'touch %q\n' "$done_f"
+    echo 'exit 0'
+  } > "$script"
+  chmod +x "$script"
 
-ask_yes_no() {  # ask_yes_no <正文> → 0=是 1=否
-  banner_prompt "$1" "（屏幕上应该还会弹出一个窗口。没看到的话，在这里输入 y 或 n。）"
-  if (( INTERACTIVE )); then
-    local out
-    out="$(osascript -e "display dialog \"$(esc "$1")\" buttons {\"跳过\",\"好\"} \
-      default button \"好\" with title \"微信 AI 助手 安装\"" 2>/dev/null)" && {
-      printf '%s' "$out" | grep -q "好" && return 0 || return 1
-    }
-  fi
-  local a; read -r -p "  要继续吗？(y/n) " a || true
-  [[ "$a" =~ ^[yY] ]]
-}
+  osascript -e "tell application \"Terminal\" to do script \"bash '$script'; exit\"" \
+            -e 'tell application "Terminal" to activate' >/dev/null 2>&1 || {
+    warn "弹不出新窗口"; rm -f "$script"; return 1; }
 
-ask_text() {  # ask_text <正文> → stdout = 使用者输入
-  banner_prompt "$1" "（屏幕上应该还会弹出一个输入框。没看到的话，直接在这里输入。）" >&2
-  if (( INTERACTIVE )); then
-    local out
-    out="$(osascript -e "display dialog \"$(esc "$1")\" default answer \"\" \
-      buttons {\"取消\",\"确定\"} default button \"确定\" \
-      with title \"微信 AI 助手 安装\"" 2>/dev/null)" && {
-      local v; v="$(printf '%s' "$out" | sed -n 's/.*text returned:\(.*\)$/\1/p')"
-      [[ -n "$v" ]] && { printf '%s' "$v"; return 0; }
-    }
-  fi
-  local a; read -r -p "  请输入： " a <&0 || true
-  printf '%s' "${a:-}"
-}
-
-
-# ── JSON 运行时：优先 node（OpenClaw 装完就有），其次 python3 ──────────────
-# 不直接用 python3，是因为全新的 Mac 上 `python3` 是个占位程序，
-# 一调用就弹「要安装开发者工具吗」，对不懂技术的人是莫名其妙的打断。
-JSONRT=""
-pick_jsonrt() {
-  if command -v node >/dev/null 2>&1; then JSONRT=node
-  elif [[ -x /usr/bin/python3 ]] && /usr/bin/python3 -c '' 2>/dev/null; then JSONRT=/usr/bin/python3
-  else JSONRT=""; fi
-  log "json runtime: ${JSONRT:-none}"
+  # 最多等 15 分钟（二维码本身约 8 分钟就过期）
+  local waited=0
+  while [[ ! -f "$done_f" ]] && (( waited < 900 )); do sleep 2; waited=$((waited + 2)); done
+  rm -f "$script" "$done_f"
+  if (( waited >= 900 )); then warn "$1 超时了"; return 1; fi
+  return 0
 }
 
 banner() {
@@ -435,7 +397,6 @@ install_agy() {
      && grep -q '"permissions"' "$HOME/.gemini/antigravity-cli/settings.json" 2>/dev/null; then
     ok "已经登录并配置过了"
   else
-    require_real_console "Antigravity 登录" 'export PATH="$HOME/.local/bin:$PATH"; agy'
     dialog "现在装助手的主力大脑：Antigravity。
 
 这一步是**整个安装里最重要的**——它用你的 Google 账号，
@@ -450,7 +411,8 @@ install_agy() {
 5. 这时候输入 /quit 再按回车，回到安装程序
 
 整个过程大约 2 分钟。"
-    agy || true
+    run_visible "Antigravity 登录" "agy" \
+      "回车选配色 → 空格取消勾选分享数据 → 回车 → 选浏览器登录 → 看到 > 输入框后敲 /quit" || true
 
     # 必须确认登录真的成功了。之前的版本跑完 agy 就往下走，
     # 结果使用者在被捕获的环境里根本没完成登录，却一路显示「装好了」。
@@ -464,9 +426,10 @@ install_agy() {
 
 要再试一次吗？
 
-• 点「好」→ 再打开一次登录界面
-• 点「跳过」→ 先这样，以后随时可以在终端里敲 agy 补上"; then
-        agy || true
+• 点「好」→ 再弹一次登录窗口
+• 点「跳过」→ 先这样，以后重跑一次安装程序也能补上"; then
+        run_visible "Antigravity 登录（重试）" "agy" \
+          "回车选配色 → 空格取消分享数据 → 回车 → 浏览器登录 → 敲 /quit 退出" || true
       else
         break
       fi
@@ -526,7 +489,6 @@ login_wechat() {
   if openclaw channels status 2>/dev/null | grep -q "openclaw-weixin.*running"; then
     ok "微信已经连上了"; return
   fi
-  require_real_console "微信扫码" 'export PATH="$HOME/.local/bin:$PATH"; openclaw channels login --channel openclaw-weixin'
   dialog "最后一步：连接微信。
 
 点「知道了」之后，这个窗口里会出现一个二维码。
@@ -536,7 +498,8 @@ login_wechat() {
 如果手机要你输入一串数字配对码，就把它敲进这个窗口再回车。
 
 二维码有效期约 8 分钟，扫不上可以重新运行安装程序。"
-  openclaw channels login --channel openclaw-weixin || warn "扫码流程退出了"
+  run_visible "微信扫码登录" "openclaw channels login --channel openclaw-weixin" \
+    "请用手机微信「扫一扫」扫下面的二维码，然后在手机上确认" || warn "扫码流程没有正常完成"
   sleep 3
   openclaw channels status 2>/dev/null | grep -q "openclaw-weixin" \
     && ok "微信连上了" || warn "没检测到微信连接，可以稍后重新运行安装程序"
