@@ -157,6 +157,35 @@ def check_google_decl() -> None:
         ok(name) if not missing else fail(f"{name} 缺: {', '.join(missing)}")
 
 
+# ── 6. .bat 的编码必须和 chcp 一致 ──────────────────────────────────────
+# 中文 Windows 控制台默认 GBK(936)。GBK 文件里写 chcp 65001 之后，
+# cmd 逐行重新解析后续内容时会把中文字节解释错，轻则乱码，
+# 重则把某一行拼成不存在的命令，报「不是内部命令也不是外部命令」。
+def check_bat_encoding() -> None:
+    print("\n[6] .bat 的编码与 chcp 是否一致")
+    import re as _re
+    for p in sorted(ROOT.rglob("*.bat")):
+        if ".git" in p.parts:
+            continue
+        rel = p.relative_to(ROOT)
+        d = p.read_bytes()
+        try:
+            text, enc = d.decode("utf-8"), "UTF-8"
+        except UnicodeDecodeError:
+            text, enc = d.decode("gbk", errors="ignore"), "GBK"
+        has_cn = bool(_re.search(r"[\u4e00-\u9fff]", text))
+        has_chcp = "chcp 65001" in text
+        if not has_cn:
+            ok(f"{rel}（无中文，无所谓）")
+        elif has_chcp and enc == "UTF-8":
+            ok(f"{rel}（UTF-8 + chcp 65001，一致）")
+        elif not has_chcp and enc == "GBK":
+            ok(f"{rel}（GBK 且不写 chcp，一致）")
+        else:
+            fail(f"{rel} 编码={enc} 但 chcp 65001={'有' if has_chcp else '无'} —— "
+                 f"会让 cmd 报「不是内部命令」")
+
+
 def main() -> int:
     print("微信 AI 助手 · 脚本自检")
     print("=" * 56)
@@ -165,6 +194,7 @@ def main() -> int:
     check_undefined()
     check_herestrings()
     check_google_decl()
+    check_bat_encoding()
     print("\n" + "=" * 56)
     if FAIL:
         print(f"✗ {len(FAIL)} 项不通过，不要提交：")

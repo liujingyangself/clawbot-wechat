@@ -483,6 +483,32 @@ install_agy() {
 5. 这时候输入 /quit 再按回车，回到安装程序
 
 整个过程大约 2 分钟。"
+    # 先看看这台机器上的 Antigravity 桌面 App 是不是已经登录着别人的账号。
+    # agy 会直接复用 App 的登录态（日志里表现为 "silent auth succeeded"，
+    # 全程不需要任何人授权）。把一台装过 Antigravity 的电脑交给别人时，
+    # 对方的助手就会静默用着前一个人的 Google 账号——实机踩过这个坑。
+    if [[ -d "$HOME/.gemini/antigravity" ]]; then
+      warn "检测到这台电脑装过 Antigravity 桌面版，可能已登录着某个账号"
+      if ! ask_yes_no "这台电脑上的 Antigravity 桌面版已经登录过某个 Google 账号。
+
+助手会直接沿用那个账号，不会再问你。
+
+如果这台电脑是你自己的、账号也是你自己的，点「好」继续。
+
+如果这台电脑之前是别人用的，点「跳过」——我会告诉你怎么换。"; then
+        dialog "要换成你自己的 Google 账号，请这样做：
+
+1. 打开「Antigravity」这个应用
+2. 在里面退出登录（Sign out）
+3. 用你自己的 Google 账号重新登录
+4. 回来重新运行一次安装程序
+
+换完之后助手才会用你的额度。"
+        warn "已跳过 Antigravity 配置。换好账号后重新运行安装程序即可。"
+        return
+      fi
+    fi
+
     # 用 print 模式（agy -p）触发登录，不要进那个全屏 TUI。
     # 两者走同一套 OAuth，但 print 模式是纯文本的：打印链接 + 等你粘授权码，
     # 不需要方向键和空格，终端兼容性问题全部绕开。
@@ -520,6 +546,19 @@ install_agy() {
     done
     if agy_logged_in; then
       ok "Antigravity 登录成功（已真实调用验证过）"
+      # 把授权到的账号显示出来。实机踩过：浏览器里同时登着好几个 Google 账号，
+      # 或者机器上本来就登着别人的，结果用的不是想用的那个，而安装器只说「成功」。
+      local lg acct
+      lg="$(ls -t "$HOME/.gemini/antigravity-cli/log/"*.log 2>/dev/null | head -1)"
+      if [[ -n "${lg:-}" ]]; then
+        acct="$(grep -o 'authenticated successfully as [^ ]*' "$lg" 2>/dev/null | tail -1 | awk '{print $NF}')"
+        if [[ -n "${acct:-}" ]]; then
+          say ""
+          printf '%s  授权的 Google 账号是：%s%s\n' "$G" "$acct" "$N"
+          printf '%s  如果这不是你想用的那个（比如这台电脑之前是别人用的），%s\n' "$Y" "$N"
+          printf '%s  打开 Antigravity 应用退出登录、换成自己的账号，再重跑一次安装。%s\n' "$Y" "$N"
+        fi
+      fi
       # 补上 onboarding 标记，免得以后又被拉进 TUI 引导
       local ob="$HOME/.gemini/antigravity-cli/cache/onboarding.json"
       mkdir -p "$(dirname "$ob")"

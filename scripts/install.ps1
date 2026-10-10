@@ -523,6 +523,29 @@ function Install-Agy {
 
 整个过程大约 2 分钟。
 "@
+    # 先看看这台机器上的 Antigravity 桌面 App 是不是已经登录着别人的账号。
+    # agy 会直接复用 App 的登录态（日志里表现为 "silent auth succeeded"，
+    # 全程不需要任何人授权）。把一台装过 Antigravity 的电脑交给别人时，
+    # 对方的助手就会静默用着前一个人的 Google 账号——实机踩过这个坑。
+    $appDir = Join-Path $env:USERPROFILE '.gemini\antigravity'
+    if (Test-Path $appDir) {
+      Warn '检测到这台电脑装过 Antigravity 桌面版，并且可能已经登录着某个账号'
+      if (-not (AskYesNo "这台电脑上的 Antigravity 桌面版已经登录过某个 Google 账号。`n`n助手会直接沿用那个账号，不会再问你。`n`n如果这台电脑是你自己的、账号也是你自己的，选「是」继续。`n`n如果这台电脑之前是别人用的，选「否」——我会告诉你怎么换成你自己的账号。")) {
+        Dlg @"
+要换成你自己的 Google 账号，请这样做：
+
+1. 打开「Antigravity」这个应用
+2. 在里面退出登录（Sign out）
+3. 用你自己的 Google 账号重新登录
+4. 回来重新运行一次安装程序
+
+换完之后助手才会用你的额度。
+"@
+        Warn '已跳过 Antigravity 配置。换好账号后重新运行安装程序即可。'
+        return
+      }
+    }
+
     # 用 print 模式（agy -p）触发登录，不要进那个全屏 TUI。
     # 两者走同一套 OAuth，但 print 模式是纯文本的：打印链接 + 等你粘授权码，
     # 不需要方向键和空格。Windows 10 自带的传统控制台对全屏 TUI 的按键兼容很差，
@@ -553,6 +576,24 @@ function Install-Agy {
     }
     if (Test-AgyLoggedIn) {
       OK 'Antigravity 登录成功（已真实调用验证过）'
+      # 把授权到的账号显示出来。实机踩过：使用者浏览器里同时登着好几个
+      # Google 账号，授权时点错了，结果用的不是有订阅的那个，
+      # 而安装器只说「成功」，没人发现。
+      try {
+        $lg = Get-ChildItem "$env:USERPROFILE\.gemini\antigravity-cli\log\*.log" -EA SilentlyContinue |
+              Sort-Object LastWriteTime -Desc | Select-Object -First 1
+        if ($lg) {
+          $acct = (Select-String -Path $lg.FullName -Pattern 'authenticated successfully as (\S+)' |
+                   Select-Object -Last 1).Matches.Groups[1].Value
+          if ($acct) {
+            Say ""
+            Write-Host "  授权的 Google 账号是：$acct" -Fore Cyan
+            Write-Host "  如果这不是你想用的那个（比如这台电脑之前是别人用的），" -Fore Yellow
+            Write-Host "  打开 Antigravity 应用退出登录、换成你自己的账号，" -Fore Yellow
+            Write-Host "  然后重新运行一次安装程序。" -Fore Yellow
+          }
+        }
+      } catch {}
       # 登录成功后补上 onboarding 标记，免得以后又被拉进 TUI 引导
       $onboard = Join-Path $env:USERPROFILE '.gemini\antigravity-cli\cache\onboarding.json'
       New-Item -ItemType Directory -Force -Path (Split-Path $onboard) | Out-Null
@@ -583,6 +624,21 @@ function Start-Gateway {
   if ((openclaw gateway status 2>$null | Out-String) -match 'running') {
     OK '服务已启动，以后开机自动运行'
   } else { Warn '服务可能没起来，装完后可以运行 openclaw gateway status 看看' }
+
+  # agy 的登录凭据存在 Windows 凭据管理器里，和「交互登录会话」绑定。
+  # 如果网关的计划任务不是 Interactive 类型，它拉起 agy 时拿不到凭据，
+  # 表现是「聊天正常，但一让它干重活就说没登录」——非常难查。
+  try {
+    $task = Get-ScheduledTask -TaskName "*OpenClaw*" -EA SilentlyContinue | Select-Object -First 1
+    if ($task) {
+      if ($task.Principal.LogonType -eq 'Interactive') {
+        OK '后台服务是交互登录类型（能用上 Antigravity）'
+      } else {
+        Warn "后台服务的登录类型是 $($task.Principal.LogonType)，不是 Interactive"
+        Warn '这会导致聊天正常、但干重活时说没登录。别用管理员权限跑安装程序。'
+      }
+    }
+  } catch {}
 }
 
 

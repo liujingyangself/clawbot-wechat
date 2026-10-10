@@ -172,7 +172,7 @@ openclaw agent --message "你好"     # 应该有回话
   中文 Windows 默认使用 GBK/CP936 代码页解析无 BOM 的 `.ps1` 文件，多字节汉字会破坏引号与花括号闭合。
   **仓库中所有 `.ps1` 脚本必须严格保存为带 BOM 的 UTF-8（UTF-8 with BOM）**。
 - **Google API Key 前缀不仅是 `AIza`**：
-  Google AI Studio 最新生成的 API Key 采用 `AQ.` 开头（如 `AQ.AbXXXXXXXX…（示例，不是真的）`），必须同时放行 `AIza` 和 `AQ.` 前缀。
+  Google AI Studio 最新生成的 API Key 采用 `AQ.` 开头（如 `AQ.xxxxxxxx…（这里是示例）`），必须同时放行 `AIza` 和 `AQ.` 前缀。
 - **微信二维码在 AI 代理环境中不可见或已过期**：
   在代理环境中，终端标准输出被捕获，使用者看不到 ASCII 二维码。你可以提取命令输出中的登录直链（`https://liteapp.weixin.qq.com/q/...`）提供给使用者在手机微信中直接打开，或者告知使用者直接双击根目录下的 `扫码登录-Windows.bat`（Mac 为 `扫码登录-Mac.command`）弹出独立窗口扫码。
 - **Windows 上服务权限错位**：
@@ -187,6 +187,17 @@ openclaw agent --message "你好"     # 应该有回话
 
 ---
 
+
+- **agy 会静默沿用 Antigravity 桌面应用的登录态**：日志里是 `silent auth succeeded`，
+  全程没有授权步骤。把装过 Antigravity 的电脑交给别人时，对方会用着前一个人的
+  Google 账号且毫无察觉。装完务必从 `~/.gemini/antigravity-cli/log/cli-*.log` 里
+  搜 `authenticated successfully as` 确认账号，并报给使用者看。
+- **SSH / 非交互会话里测 agy 必然失败**：它的凭据和交互登录会话绑定（凭据管理器/DPAPI，
+  磁盘上没有凭据文件）。这是**误报**，不代表助手不能用。要验证就让网关自己调：
+  `openclaw agent --message "用 agy ..."`。网关的计划任务是 Interactive 类型，
+  和使用者桌面同一个会话，能拿到凭据。
+- **`.bat` 的编码必须和 `chcp` 一致**：GBK 文件 + `chcp 65001` 会让 cmd 逐行重解析时
+  把中文行拼成非法命令，报「不是内部命令」。要么 GBK 且不写 chcp，要么 UTF-8 且写 chcp。
 
 ## 改完脚本必须跑自检
 
