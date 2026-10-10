@@ -523,21 +523,42 @@ function Install-Agy {
 
 整个过程大约 2 分钟。
 "@
-    Invoke-Visible 'Antigravity 登录' 'agy' `
-      '回车选配色 → 空格取消勾选分享数据 → 回车 → 选浏览器登录 → 看到 > 输入框后敲 /quit' | Out-Null
+    # 用 print 模式（agy -p）触发登录，不要进那个全屏 TUI。
+    # 两者走同一套 OAuth，但 print 模式是纯文本的：打印链接 + 等你粘授权码，
+    # 不需要方向键和空格。Windows 10 自带的传统控制台对全屏 TUI 的按键兼容很差，
+    # 走 TUI 经常按键没反应、界面错位，而 print 模式完全没这个问题。
+    Invoke-Visible 'Antigravity 登录' 'agy -p "hello"' `
+      '复制屏幕上那条 https://accounts.google.com/... 链接到浏览器打开，用你的 Google 账号授权，再把拿到的授权码粘回这个窗口回车' | Out-Null
 
     # 必须确认登录真的成功了。之前的版本跑完 agy 就往下走，
     # 结果使用者在被捕获的环境里根本没完成登录，却一路显示「装好了」。
+    # 只看 settings.json 存不存在是不够的：那个文件在没真登录的情况下也会被创建，
+    # 于是安装显示「成功」，使用者要到实际用的时候才发现 agy 根本没登录。
+    # 必须真调一次。
+    function Test-AgyLoggedIn {
+      try {
+        $out = & agy -p "ping" 2>&1 | Out-String
+        return ($LASTEXITCODE -eq 0 -and $out -notmatch 'not logged in|Authentication required|auth timed out|authentication failed')
+      } catch { return $false }
+    }
+
     $tries = 0
-    while ((-not (Test-Path $settings)) -and $tries -lt 2) {
+    while ((-not (Test-AgyLoggedIn)) -and $tries -lt 2) {
       $tries++
       Warn '没有检测到登录成功的痕迹'
       if (AskYesNo "看起来 Antigravity 还没登录成功。`n`n没有它，助手每天只能回二十来条消息就会停。`n`n要再试一次吗？`n`n• 是 → 再弹一次登录窗口`n• 否 → 先这样，以后重跑一次安装程序也能补上") {
-        Invoke-Visible 'Antigravity 登录（重试）' 'agy' `
-          '回车选配色 → 空格取消分享数据 → 回车 → 浏览器登录 → 敲 /quit 退出' | Out-Null
+        Invoke-Visible 'Antigravity 登录（重试）' 'agy -p "hello"' `
+          '把链接复制到浏览器授权，再把授权码粘回这个窗口回车' | Out-Null
       } else { break }
     }
-    if (Test-Path $settings) { OK 'Antigravity 登录成功' }
+    if (Test-AgyLoggedIn) {
+      OK 'Antigravity 登录成功（已真实调用验证过）'
+      # 登录成功后补上 onboarding 标记，免得以后又被拉进 TUI 引导
+      $onboard = Join-Path $env:USERPROFILE '.gemini\antigravity-cli\cache\onboarding.json'
+      New-Item -ItemType Directory -Force -Path (Split-Path $onboard) | Out-Null
+      '{"consumerOnboardingComplete":true,"enterpriseOnboardingComplete":true,"onboardingComplete":true}' |
+        Set-Content $onboard -Encoding utf8
+    }
     else {
       Warn 'Antigravity 没登录成功 —— 助手会受每天二十来条的免费额度限制'
       Warn '以后想补：打开 PowerShell 敲 agy，照提示登录一次就行'

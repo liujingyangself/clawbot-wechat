@@ -483,13 +483,25 @@ install_agy() {
 5. 这时候输入 /quit 再按回车，回到安装程序
 
 整个过程大约 2 分钟。"
-    run_visible "Antigravity 登录" "agy" \
-      "回车选配色 → 空格取消勾选分享数据 → 回车 → 选浏览器登录 → 看到 > 输入框后敲 /quit" || true
+    # 用 print 模式（agy -p）触发登录，不要进那个全屏 TUI。
+    # 两者走同一套 OAuth，但 print 模式是纯文本的：打印链接 + 等你粘授权码，
+    # 不需要方向键和空格，终端兼容性问题全部绕开。
+    run_visible "Antigravity 登录" 'agy -p "hello"' \
+      "复制屏幕上那条 https://accounts.google.com/... 链接到浏览器打开，用 Google 账号授权，再把授权码粘回这个窗口回车" || true
 
     # 必须确认登录真的成功了。之前的版本跑完 agy 就往下走，
     # 结果使用者在被捕获的环境里根本没完成登录，却一路显示「装好了」。
+    # 只看 settings.json 存不存在是不够的：那个文件在没真登录的情况下也会被创建，
+    # 于是安装显示「成功」，使用者要到实际用的时候才发现 agy 根本没登录。必须真调一次。
+    agy_logged_in() {
+      local out
+      out="$(agy -p "ping" 2>&1)" || return 1
+      printf '%s' "$out" | grep -qiE "not logged in|Authentication required|auth timed out|authentication failed" && return 1
+      return 0
+    }
+
     local tries=0
-    while [[ ! -f "$HOME/.gemini/antigravity-cli/settings.json" ]] && (( tries < 2 )); do
+    while ! agy_logged_in && (( tries < 2 )); do
       (( tries++ ))
       warn "没有检测到登录成功的痕迹"
       if ask_yes_no "看起来 Antigravity 还没登录成功。
@@ -500,14 +512,18 @@ install_agy() {
 
 • 点「好」→ 再弹一次登录窗口
 • 点「跳过」→ 先这样，以后重跑一次安装程序也能补上"; then
-        run_visible "Antigravity 登录（重试）" "agy" \
-          "回车选配色 → 空格取消分享数据 → 回车 → 浏览器登录 → 敲 /quit 退出" || true
+        run_visible "Antigravity 登录（重试）" 'agy -p "hello"' \
+          "把链接复制到浏览器授权，再把授权码粘回这个窗口回车" || true
       else
         break
       fi
     done
-    if [[ -f "$HOME/.gemini/antigravity-cli/settings.json" ]]; then
-      ok "Antigravity 登录成功"
+    if agy_logged_in; then
+      ok "Antigravity 登录成功（已真实调用验证过）"
+      # 补上 onboarding 标记，免得以后又被拉进 TUI 引导
+      local ob="$HOME/.gemini/antigravity-cli/cache/onboarding.json"
+      mkdir -p "$(dirname "$ob")"
+      printf '%s' '{"consumerOnboardingComplete":true,"enterpriseOnboardingComplete":true,"onboardingComplete":true}' > "$ob"
     else
       warn "Antigravity 没登录成功 —— 助手会受每天二十来条的免费额度限制"
       warn "以后想补：打开终端敲 agy，照提示登录一次就行"
