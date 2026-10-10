@@ -1,4 +1,4 @@
-﻿# 一行安装的引导脚本（Windows）
+# 一行安装的引导脚本（Windows）
 #
 #   irm https://raw.githubusercontent.com/liujingyangself/clawbot-wechat/main/get.ps1 | iex
 #

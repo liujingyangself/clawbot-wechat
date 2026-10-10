@@ -35,10 +35,20 @@ def ok(msg: str) -> None:
 # 多字节汉字会破坏引号和花括号的闭合，报 "The string is missing the terminator"。
 def check_bom() -> None:
     print("\n[1] PowerShell 脚本的 UTF-8 BOM")
+    # get.ps1 是例外：它靠 `irm | iex` 取来当字符串执行，irm 已经按 UTF-8
+    # 解码好了，BOM 根本到不了解析器；留着反而会让 iex 把 BOM+# 当成命令名，
+    # 在使用者面前报一行吓人的红字。需要 BOM 的是存到磁盘、被 -File 解析的那些。
+    EXEMPT = {"get.ps1"}
     for p in sorted(ROOT.rglob("*.ps1")):
         if ".git" in p.parts:
             continue
         rel = p.relative_to(ROOT)
+        if str(rel) in EXEMPT:
+            if p.read_bytes()[:3] == b"\xef\xbb\xbf":
+                fail(f"{rel} 不该有 BOM（它走 irm|iex，BOM 会让使用者看到红字报错）")
+            else:
+                ok(f"{rel}（走 irm|iex，按设计不带 BOM）")
+            continue
         if p.read_bytes()[:3] == b"\xef\xbb\xbf":
             ok(f"{rel}")
         else:

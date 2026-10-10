@@ -79,9 +79,16 @@ Start-Sleep -Seconds 2
   try {
     # 在非交互或重定向环境中（例如由 AI 代理调起），普通 Start-Process 无法分配前台控制台；
     # 借助 cmd.exe /c start 强制创建独立的前台桌面控制台。
+    # -Wait 会无限等下去：使用者要是走开了，安装器就永远卡着。
+    # 改成 -PassThru 不加 -Wait，自己控制 15 分钟上限（二维码本身约 8 分钟就过期）。
     $proc = Start-Process -FilePath 'cmd.exe' `
       -ArgumentList '/c', 'start', '/wait', "`"$Title`"", 'powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $b64 `
-      -PassThru -Wait -ErrorAction Stop
+      -PassThru -ErrorAction Stop
+    if (-not $proc.WaitForExit(900000)) {
+      try { $proc.Kill() } catch {}
+      Warn "$Title 超时了（15 分钟）"
+      return $false
+    }
   } catch {
     try {
       $proc = Start-Process -FilePath 'powershell.exe' `
@@ -475,11 +482,23 @@ function Install-Agy {
     OK '已经登录并配置过了'
   } else {
     # 先做轻量静默探测：如果 agy -p 能够正常输出，说明当前机器已有有效凭据，直接自动补齐配置，无需在传统控制台里与 TUI 交互
+    # 只有当 agy 的配置目录已经存在时才探测。
+    # 实测：未登录时 `agy -p` 不会立刻退出，而是打印一串 OAuth 链接并等着
+    # 粘授权码（40 秒都不返回）。全新机器上每次都会走到这里，白等一分钟、
+    # 还会把一堆链接倒进调用方的缓冲区；stdin 若是管道更可能直接卡死。
     $hasSession = $false
-    try {
-      $probe = agy -p "ping" 2>$null
-      if ($LASTEXITCODE -eq 0 -and $probe) { $hasSession = $true }
-    } catch {}
+    $agyDir = Join-Path $env:USERPROFILE '.gemini\antigravity-cli'
+    if (Test-Path $agyDir) {
+      try {
+        $job = Start-Job -ScriptBlock {
+          $out = & agy -p "ping" 2>$null
+          if ($LASTEXITCODE -eq 0 -and $out) { 'ok' }
+        }
+        if (Wait-Job $job -Timeout 45) { $hasSession = ((Receive-Job $job) -eq 'ok') }
+        else { Stop-Job $job -ErrorAction SilentlyContinue }
+        Remove-Job $job -Force -ErrorAction SilentlyContinue
+      } catch {}
+    }
 
     if ($hasSession) {
       $onboard = Join-Path $env:USERPROFILE '.gemini\antigravity-cli\cache\onboarding.json'
