@@ -312,15 +312,17 @@ install_wechat_plugin() {
 
 # ── 3. Gemini 密钥（免费，不用绑卡）──────────────────────────────────────
 setup_gemini_key() {
-  step "配置 AI 大脑（Google Gemini）"
+  step "配置备用通道（Google Gemini）"
 
   local existing
-  existing="$(openclaw config get models.providers.google.apiKey 2>/dev/null | grep -o 'AIza[A-Za-z0-9_-]*' | head -1)"
+  existing="$(openclaw config get models.providers.google.apiKey 2>/dev/null | grep -oE '(AIza|AQ\.)[A-Za-z0-9_.-]{20,}' | head -1)"
   if [[ -n "${existing:-}" ]]; then ok "已经配过密钥了"; return; fi
 
-  dialog "接下来要拿一把「钥匙」，让助手能用上 Google 的 AI。
+  dialog "接下来拿一把「钥匙」，作为助手的备用通道。
 
-这是免费的，不需要信用卡。
+免费、不用信用卡，但要先说清楚：
+这个免费额度**每天只有二十来次**，所以它只是兜底，
+日常干活靠的是上一步装的 Antigravity。
 
 点「知道了」之后我会帮你打开网页，你照着做：
 
@@ -337,11 +339,11 @@ setup_gemini_key() {
   while (( tries < 3 )); do
     key="$(ask_text "把复制到的密钥粘贴到下面（以 AIza 开头的那一长串）：")"
     key="$(printf '%s' "${key:-}" | tr -d '[:space:]')"
-    if [[ "$key" =~ ^AIza[A-Za-z0-9_-]{20,}$ ]]; then
+    if [[ "$key" =~ ^(AIza[A-Za-z0-9_-]{20,}|AQ\.[A-Za-z0-9_.-]{20,})$ ]]; then
       say "  正在验证这把钥匙能不能用…"
-      if curl -fsS --max-time 25 \
-          "https://generativelanguage.googleapis.com/v1beta/models?key=$key" \
-          >/dev/null 2>>"$LOG"; then
+      # 必须真发一次生成请求。列模型那个接口在额度为 0 时照样返回 200，
+      # 用它验证等于没验——装的时候显示「通过」，用的时候才发现一次都生成不了。
+      if probe_any_model "$key" >/dev/null; then
         openclaw config set models.providers.google "{\"apiKey\":\"$key\"}" \
           --strict-json --merge >>"$LOG" 2>&1 || die "写入密钥失败"
         ok "密钥验证通过"
@@ -358,48 +360,51 @@ setup_gemini_key() {
 }
 
 # ── 4. 选模型 + 装助手的行为规则 ─────────────────────────────────────────
-# 从 Google 实际返回的模型列表里挑一个 flash，而不是写死名字——
-# 模型名每隔几个月就会变，写死的话以后装就会挂。
-choose_model() {
-  local fallback="google/gemini-3-flash-preview"
-  [[ -z "${JSONRT:-}" || -z "${GEMINI_KEY:-}" ]] && { echo "$fallback"; return; }
-  local json
+# 挑模型：对候选逐个真发一次最小的生成请求，谁通用谁。
+#
+# 两条经验是实机踩出来的：
+#  · flash 的免费档只有 20 次/天（Google 的原话：limit: 20），flash-lite 高得多，
+#    所以**优先 lite**——之前把 lite 排除掉是错的。
+#  · 不能只看模型列表。列表接口在额度为 0 时照样返回 200。
+PICKED_MODEL=""
+probe_any_model() {  # probe_any_model <key> → stdout = 可用的模型名
+  local key="$1" json
   json="$(curl -fsS --max-time 25 \
-    "https://generativelanguage.googleapis.com/v1beta/models?key=$GEMINI_KEY" 2>/dev/null)" \
-    || { echo "$fallback"; return; }
-  local picked=""
-  if [[ "$JSONRT" == node ]]; then
-    picked="$(printf '%s' "$json" | node -e '
-      let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
-        let ms=[];try{ms=(JSON.parse(s).models||[])}catch(e){}
-        const ok=ms.filter(m=>(m.supportedGenerationMethods||[]).includes("generateContent"))
-                   .map(m=>(m.name||"").replace(/^models\//,""))
-                   .filter(n=>n.includes("flash")&&!n.includes("image")&&!n.includes("tts")&&!n.includes("lite"));
-        const pref=[/^gemini-3(\.\d+)?-flash$/,/^gemini-3(\.\d+)?-flash-preview$/,/^gemini-flash-latest$/];
-        for(const re of pref){const h=ok.find(n=>re.test(n));if(h){console.log(h);return;}}
-        console.log(ok[0]||"");
-      });' 2>/dev/null)"
-  else
-    picked="$(printf '%s' "$json" | "$JSONRT" -c '
-import sys,json,re
-try: ms=json.load(sys.stdin).get("models",[])
-except Exception: ms=[]
-ok=[m.get("name","").replace("models/","") for m in ms
-    if "generateContent" in m.get("supportedGenerationMethods",[])]
-ok=[n for n in ok if "flash" in n and not any(x in n for x in ("image","tts","lite"))]
-for pat in (r"^gemini-3(\.\d+)?-flash$", r"^gemini-3(\.\d+)?-flash-preview$", r"^gemini-flash-latest$"):
-    hit=[n for n in ok if re.match(pat,n)]
-    if hit: print(hit[0]); sys.exit()
-print(ok[0] if ok else "")' 2>/dev/null)"
-  fi
-  [[ -n "$picked" ]] && echo "google/$picked" || echo "$fallback"
+    "https://generativelanguage.googleapis.com/v1beta/models?key=$key" 2>/dev/null)" || return 1
+
+  local names
+  names="$(printf '%s' "$json" | tr ',' '\n' | grep -o '"models/[a-z0-9.-]*"' \
+           | tr -d '"' | sed 's#^models/##' \
+           | grep flash | grep -v image | grep -v tts | sort -u)"
+  [[ -z "$names" ]] && return 1
+
+  # lite 在前：它的免费额度最大
+  local ordered
+  ordered="$(printf '%s\n' "$names" | grep lite; printf '%s\n' "$names" | grep -v lite)"
+
+  local m code
+  while IFS= read -r m; do
+    [[ -z "$m" ]] && continue
+    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
+      -H 'Content-Type: application/json' -X POST \
+      "https://generativelanguage.googleapis.com/v1beta/models/$m:generateContent?key=$key" \
+      -d '{"contents":[{"parts":[{"text":"hi"}]}],"generationConfig":{"maxOutputTokens":1}}' 2>/dev/null)"
+    log "probe $m -> HTTP $code"
+    if [[ "$code" == "200" ]]; then PICKED_MODEL="$m"; printf '%s' "$m"; return 0; fi
+  done <<< "$ordered"
+  return 1
 }
 
 configure_agent() {
   step "设置助手的大脑和脾气"
-  local model; model="$(choose_model)"
-  log "chosen model: $model"
-  openclaw config set agents.defaults.model.primary "$model" >>"$LOG" 2>&1 || true
+  local m="${PICKED_MODEL:-gemini-flash-lite-latest}"
+  log "chosen model: $m"
+  # OpenClaw 自己的模型目录常常只认一两个 google 模型，lite 往往不在里面，
+  # 直接 set primary 会报 Unknown model。所以先把它显式声明进 provider。
+  openclaw config set models.providers.google \
+    "{\"models\":[{\"id\":\"$m\",\"input\":[\"text\"],\"contextWindow\":1000000,\"contextTokens\":200000,\"maxTokens\":8192,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0}}]}" \
+    --strict-json --merge >>"$LOG" 2>&1 || true
+  openclaw config set agents.defaults.model.primary "google/$m" >>"$LOG" 2>&1 || true
   openclaw config set memory.search.enabled false >>"$LOG" 2>&1 || true
 
   # 只有本人能用；群里不说话
@@ -409,7 +414,7 @@ configure_agent() {
   # 能跑命令，但限制在 allowlist 内
   openclaw config set tools.exec.mode auto >>"$LOG" 2>&1 || true
 
-  ok "大脑：${model#google/}（免费额度）"
+  ok "大脑：$m"
   ok "只有你能用它，群聊里它不说话"
 }
 
@@ -431,7 +436,10 @@ install_agy() {
     ok "已经登录并配置过了"
   else
     require_real_console "Antigravity 登录" 'export PATH="$HOME/.local/bin:$PATH"; agy'
-    dialog "马上要让 Antigravity 登录你的 Google 账号。
+    dialog "现在装助手的主力大脑：Antigravity。
+
+这一步是**整个安装里最重要的**——它用你的 Google 账号，
+额度比后面那个备用通道大得多。跳过的话助手每天只能回二十来条消息。
 
 点「知道了」之后，窗口里会出现一个设置界面，请这样操作：
 
@@ -443,6 +451,32 @@ install_agy() {
 
 整个过程大约 2 分钟。"
     agy || true
+
+    # 必须确认登录真的成功了。之前的版本跑完 agy 就往下走，
+    # 结果使用者在被捕获的环境里根本没完成登录，却一路显示「装好了」。
+    local tries=0
+    while [[ ! -f "$HOME/.gemini/antigravity-cli/settings.json" ]] && (( tries < 2 )); do
+      (( tries++ ))
+      warn "没有检测到登录成功的痕迹"
+      if ask_yes_no "看起来 Antigravity 还没登录成功。
+
+没有它，助手每天只能回二十来条消息就会停。
+
+要再试一次吗？
+
+• 点「好」→ 再打开一次登录界面
+• 点「跳过」→ 先这样，以后随时可以在终端里敲 agy 补上"; then
+        agy || true
+      else
+        break
+      fi
+    done
+    if [[ -f "$HOME/.gemini/antigravity-cli/settings.json" ]]; then
+      ok "Antigravity 登录成功"
+    else
+      warn "Antigravity 没登录成功 —— 助手会受每天二十来条的免费额度限制"
+      warn "以后想补：打开终端敲 agy，照提示登录一次就行"
+    fi
   fi
   "$REPO_DIR/scripts/agy-permissions.sh" >>"$LOG" 2>&1 \
     && ok "已限制它只能在「桌面」和「文稿」里干活" \
@@ -539,7 +573,7 @@ verify() {
   # 「助手不回话」，使用者完全猜不到是网络问题。
   local gkey
   gkey="$(openclaw config get models.providers.google.apiKey 2>/dev/null \
-          | grep -o 'AIza[A-Za-z0-9_-]*' | head -1)"
+          | grep -oE '(AIza|AQ\.)[A-Za-z0-9_.-]{20,}' | head -1)"
   if [[ -n "${gkey:-}" ]]; then
     if curl -fsS --max-time 25 \
         "https://generativelanguage.googleapis.com/v1beta/models?key=$gkey" \
@@ -588,9 +622,9 @@ install_openclaw
 configure_openclaw_proxy
 pick_jsonrt
 install_wechat_plugin
+install_agy
 setup_gemini_key
 configure_agent
-install_agy
 start_gateway
 install_agent_rules
 login_wechat

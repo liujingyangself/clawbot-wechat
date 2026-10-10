@@ -321,14 +321,16 @@ function Install-WeChatPlugin {
 
 # ── 3. Gemini 密钥（免费，不用绑卡）──────────────────────────────────────
 function Setup-GeminiKey {
-  Step '配置 AI 大脑（Google Gemini）'
+  Step '配置备用通道（Google Gemini）'
   $existing = (openclaw config get models.providers.google.apiKey 2>$null | Out-String)
-  if ($existing -match 'AIza[A-Za-z0-9_\-]{20,}') { OK '已经配过密钥了'; return }
+  if ($existing -match '(AIza|AQ\.)[A-Za-z0-9_.\-]{20,}') { OK '已经配过密钥了'; return }
 
   Dlg @"
-接下来要拿一把「钥匙」，让助手能用上 Google 的 AI。
+接下来拿一把「钥匙」，作为助手的备用通道。
 
-这是免费的，不需要信用卡。
+免费、不用信用卡，但要先说清楚：
+这个免费额度每天只有二十来次，所以它只是兜底，
+日常干活靠的是上一步装的 Antigravity。
 
 点「确定」之后我会帮你打开网页，你照着做：
 
@@ -343,11 +345,11 @@ function Setup-GeminiKey {
 
   for ($i = 0; $i -lt 3; $i++) {
     $key = (AskText '把复制到的密钥粘贴到下面（以 AIza 开头的那一长串）：') -replace '\s',''
-    if ($key -match '^AIza[A-Za-z0-9_\-]{20,}$') {
+    if ($key -match '^(AIza[A-Za-z0-9_\-]{20,}|AQ\.[A-Za-z0-9_.\-]{20,})$') {
       Say '  正在验证这把钥匙能不能用…'
       try {
-        Invoke-RestMethod -Uri "https://generativelanguage.googleapis.com/v1beta/models?key=$key" `
-          -TimeoutSec 25 -UseBasicParsing | Out-Null
+        # 必须真发一次生成请求：列模型接口在额度为 0 时照样返回 200
+        if (-not (Probe-AnyModel $key)) { throw '这把钥匙没有可用的生成额度' }
         openclaw config set models.providers.google "{`"apiKey`":`"$key`"}" --strict-json --merge *>> $Log
         $script:GeminiKey = $key
         OK '密钥验证通过'; return
@@ -358,38 +360,54 @@ function Setup-GeminiKey {
 }
 
 # ── 4. 选模型 + 装助手的行为规则 ─────────────────────────────────────────
-# 从 Google 实际返回的模型列表里挑一个 flash，而不是写死名字——
-# 模型名每隔几个月就会变，写死的话以后装就会挂。
-function Choose-Model {
-  $fallback = 'google/gemini-3-flash-preview'
-  if (-not $script:GeminiKey) { return $fallback }
+# 挑模型：对候选逐个真发一次最小的生成请求，谁通用谁。
+#
+# 两条经验是实机踩出来的：
+#  · flash 的免费档只有 20 次/天（Google 原话：limit: 20），flash-lite 高得多，
+#    所以**优先 lite**——之前把 lite 排除掉是错的。
+#  · 不能只看模型列表：列表接口在额度为 0 时照样返回 200，用它验证等于没验。
+$script:PickedModel = ''
+function Probe-AnyModel { param($key)
   try {
-    $r = Invoke-RestMethod -TimeoutSec 25 -UseBasicParsing `
-      -Uri "https://generativelanguage.googleapis.com/v1beta/models?key=$($script:GeminiKey)"
-  } catch { return $fallback }
-  $ok = @($r.models |
+    $all = Invoke-RestMethod -TimeoutSec 25 -UseBasicParsing `
+      -Uri "https://generativelanguage.googleapis.com/v1beta/models?key=$key"
+  } catch { return '' }
+
+  $flash = @($all.models |
     Where-Object { $_.supportedGenerationMethods -contains 'generateContent' } |
     ForEach-Object { $_.name -replace '^models/','' } |
-    Where-Object { $_ -like '*flash*' -and $_ -notlike '*image*' `
-                   -and $_ -notlike '*tts*' -and $_ -notlike '*lite*' })
-  foreach ($re in @('^gemini-3(\.\d+)?-flash$','^gemini-3(\.\d+)?-flash-preview$','^gemini-flash-latest$')) {
-    $hit = $ok | Where-Object { $_ -match $re } | Select-Object -First 1
-    if ($hit) { return "google/$hit" }
+    Where-Object { $_ -like '*flash*' -and $_ -notlike '*image*' -and $_ -notlike '*tts*' })
+  # lite 在前：它的免费额度最大
+  $ordered = @($flash | Where-Object { $_ -like '*lite*' }) +
+             @($flash | Where-Object { $_ -notlike '*lite*' })
+
+  foreach ($m in $ordered) {
+    try {
+      Invoke-RestMethod -TimeoutSec 20 -UseBasicParsing -Method Post -ContentType 'application/json' `
+        -Uri "https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=$key" `
+        -Body '{"contents":[{"parts":[{"text":"hi"}]}],"generationConfig":{"maxOutputTokens":1}}' | Out-Null
+      Write-Log "probe $m -> OK"
+      $script:PickedModel = $m
+      return $m
+    } catch { Write-Log "probe $m -> $($_.Exception.Message)" }
   }
-  if ($ok.Count -gt 0) { return "google/$($ok[0])" }
-  return $fallback
+  return ''
 }
 
 function Configure-Agent {
   Step '设置助手的大脑和脾气'
-  $model = Choose-Model
-  Write-Log "chosen model: $model"
-  openclaw config set agents.defaults.model.primary $model *>> $Log
+  $m = if ($script:PickedModel) { $script:PickedModel } else { 'gemini-flash-lite-latest' }
+  Write-Log "chosen model: $m"
+  # OpenClaw 自己的模型目录常常只认一两个 google 模型，lite 往往不在里面，
+  # 直接 set primary 会报 Unknown model。所以先把它显式声明进 provider。
+  $decl = '{"models":[{"id":"' + $m + '","input":["text"],"contextWindow":1000000,"contextTokens":200000,"maxTokens":8192,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}}]}'
+  openclaw config set models.providers.google $decl --strict-json --merge *>> $Log
+  openclaw config set agents.defaults.model.primary "google/$m" *>> $Log
   openclaw config set memory.search.enabled false *>> $Log
   openclaw config set channels.openclaw-weixin '{"dmPolicy":"pairing","groupPolicy":"allowlist"}' --strict-json --merge *>> $Log
   openclaw config set tools.exec.mode auto *>> $Log
 
-  OK "大脑：$($model -replace '^google/','')（免费额度）"
+  OK "大脑：$m"
   OK '只有你能用它，群聊里它不说话'
 }
 
@@ -414,7 +432,10 @@ function Install-Agy {
   } else {
     Require-RealConsole 'Antigravity 登录'
     Dlg @"
-马上要让 Antigravity 登录你的 Google 账号。
+现在装助手的主力大脑：Antigravity。
+
+这一步是整个安装里最重要的 —— 它用你的 Google 账号，
+额度比后面那个备用通道大得多。跳过的话助手每天只能回二十来条消息。
 
 点「确定」之后，窗口里会出现一个设置界面，请这样操作：
 
@@ -427,6 +448,22 @@ function Install-Agy {
 整个过程大约 2 分钟。
 "@
     agy
+
+    # 必须确认登录真的成功了。之前的版本跑完 agy 就往下走，
+    # 结果使用者在被捕获的环境里根本没完成登录，却一路显示「装好了」。
+    $tries = 0
+    while ((-not (Test-Path $settings)) -and $tries -lt 2) {
+      $tries++
+      Warn '没有检测到登录成功的痕迹'
+      if (AskYesNo "看起来 Antigravity 还没登录成功。`n`n没有它，助手每天只能回二十来条消息就会停。`n`n要再试一次吗？`n`n• 是 → 再打开一次登录界面`n• 否 → 先这样，以后在 PowerShell 里敲 agy 也能补上") {
+        agy
+      } else { break }
+    }
+    if (Test-Path $settings) { OK 'Antigravity 登录成功' }
+    else {
+      Warn 'Antigravity 没登录成功 —— 助手会受每天二十来条的免费额度限制'
+      Warn '以后想补：打开 PowerShell 敲 agy，照提示登录一次就行'
+    }
   }
   & powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'agy-permissions.ps1') *>> $Log
   if ($LASTEXITCODE -eq 0) { OK '已限制它只能在「桌面」和「文档」里干活' } else { Warn "权限收紧失败，日志：$Log" }
@@ -526,7 +563,7 @@ function Verify {
   # 先单独验证到 Gemini 的通路。不这么做的话，代理没配通会表现成
   # 「助手不回话」，使用者完全猜不到是网络问题。
   $keyOut = (openclaw config get models.providers.google.apiKey 2>$null | Out-String)
-  $km = [regex]::Match($keyOut, 'AIza[A-Za-z0-9_\-]{20,}')
+  $km = [regex]::Match($keyOut, '(AIza|AQ\.)[A-Za-z0-9_.\-]{20,}')
   if ($km.Success) {
     try {
       Invoke-RestMethod -TimeoutSec 25 -UseBasicParsing `
@@ -555,9 +592,9 @@ Setup-Proxy
 Install-OpenClaw
 Configure-OpenClawProxy
 Install-WeChatPlugin
+Install-Agy
 Setup-GeminiKey
 Configure-Agent
-Install-Agy
 Start-Gateway
 Install-AgentRules
 Login-WeChat

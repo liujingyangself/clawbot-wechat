@@ -92,12 +92,19 @@ Antigravity 的登录界面按键。`get.sh` 已经把 stdin 接回 `/dev/tty` �
 
 | # | 环节 | 使用者要做什么 | 卡住的典型原因 |
 |---|---|---|---|
-| 1 | Gemini 密钥 | 在打开的网页点 Create API key，复制 `AIza…` 粘回弹窗 | 没登录 Google；复制漏了几位 |
-| 2 | agy 登录 | 回车选配色 → 空格取消数据共享 → 回车 → 浏览器登录 → 输 `/quit` | 卡在 TUI 里不知道怎么退出 |
-| 3 | 微信扫码 | 手机微信扫终端里的二维码，手机上确认 | 终端窗口被挡住；二维码过期（约 8 分钟） |
+| 1 | **agy 登录**（最关键） | 回车选配色 → 空格取消数据共享 → 回车 → 浏览器登录 → 输 `/quit` | 卡在 TUI 里不知道怎么退出 |
+| 2 | Gemini 密钥 | 在网页点 Create API key，复制粘回（`AIza…` 或 `AQ.…` 都对） | 没登录 Google；复制漏了几位 |
+| 3 | 微信扫码 | 手机微信扫终端里的二维码，手机上确认 | 终端被挡住；二维码过期（约 8 分钟） |
 | 4 | 画图（可选） | 决定开不开通；要开就得绑卡 | 不清楚要花钱 |
 
-第 2 步和第 3 步**必须在前台终端里跑**，不能后台执行——它们需要键盘输入和显示二维码。
+**第 1 步决定这个助手能不能真正用起来，不要帮使用者跳过。** Antigravity 用的是他自己的
+Google 账号，额度大得多；而第 2 步那个 API key 的免费档**每天只有约 20 次**（Google 原话：
+`limit: 20`）。只配 key 不登录 agy，助手发二十来条消息就会开始报 429。
+
+安装器会检查第 1 步是否成功（看 `~/.gemini/antigravity-cli/settings.json` 在不在），
+没成功会追问一次。**不要替使用者点「跳过」。**
+
+第 1 步和第 3 步**必须在前台终端里跑**，不能捕获输出——它们需要键盘输入和显示二维码。
 
 ---
 
@@ -106,9 +113,18 @@ Antigravity 的登录界面按键。`get.sh` 已经把 stdin 接回 `/dev/tty` �
 - **图像生成没有免费额度。** [官方定价页](https://ai.google.dev/gemini-api/docs/pricing)
   对所有图像模型的 Free Tier 都写 "Not available"：Nano Banana Pro 约 $0.134/张。
   必须开通计费。所以安装器把画图做成**可选**，跳过不影响其他功能。
-- **对话和 Agent 能力是免费的。** `gemini-3-flash` 有免费额度，而且支持原生工具调用，
-  所以不绑卡也能有完整的 agent 能力。
-- **`agy` 也是免费的**，走使用者自己的 Google 账号，不消耗上面那个 API key 的额度。
+- **Gemini API 的免费档非常小。** 实机抓到 Google 的原话：
+  `Quota exceeded for generate_content_free_tier_requests, limit: 20, model: gemini-3.6-flash`
+  —— 也就是 **flash 每天 20 次**。`flash-lite` 的额度高得多，所以安装器
+  **优先选 lite**，并且逐个模型真发一次 `generateContent` 来确认可用。
+- **不要只用「列模型」接口验证密钥。** `/v1beta/models` 在生成额度为 0 时照样返回 200，
+  用它验证等于没验。必须真发一次生成请求。
+- **密钥有两种格式**：老的 `AIza…` 和新的 `AQ.…`，都是有效的，不要只认前者。
+- **`agy` 走使用者自己的 Google 账号**（AI Pro 订阅的额度），不消耗上面那个 API key 的额度。
+  这是助手的主力通道。
+- **Google AI Pro 订阅 ≠ API 额度。** 这是两套独立的东西：订阅只作用于 Gemini 网页版、
+  Antigravity 这类 Google 自家产品；API 按量单独计费。所以「我有 Pro 为什么还限额」的
+  答案是：Pro 对 API key 不起作用，但对 `agy` 起作用。
 - **不要用反代 Antigravity 的 OAuth 的方案**（CLIProxyAPI 一类）。
   [Antigravity 条款](https://antigravity.google/terms)明文禁止第三方工具通过它的 OAuth 访问，
   Google 在封号。本项目用的是官方 `agy` 二进制，认证留在 Google 自己的程序里，性质不同。
@@ -136,6 +152,10 @@ openclaw agent --message "你好"     # 应该有回话
 3. 还不行就**重跑安装脚本**（幂等，不会重复装）
 
 ### 几个你可能会踩的坑
+
+- **`openclaw config set ... model.primary` 报 `Unknown model`**：OpenClaw 自己的模型目录
+  常常只认一两个 google 模型，`flash-lite` 往往不在里面，`models list --refresh` 也补不上。
+  解法是先把模型显式声明进 `models.providers.google.models[]`，再设 primary。安装器已经这么做了。
 
 - **`openclaw` 装完找不到命令**：PATH 没刷新。macOS 新开一个终端窗口；
   Windows 用 `Refresh-Path`（脚本里有这个函数）或重开 PowerShell。
