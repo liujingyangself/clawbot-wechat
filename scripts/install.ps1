@@ -11,6 +11,7 @@ $Log     = Join-Path $LogDir 'install.log'
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
 Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic
 
 # ── 输出与日志 ───────────────────────────────────────────────────────────
@@ -25,18 +26,74 @@ function Die   { param($m)
   Read-Host "`n按回车键关闭"; exit 1
 }
 
-# ── 弹窗（这是「需要你配合」的提示方式）────────────────────────────────
+# ── 提示（需要使用者配合时）──────────────────────────────────────────────
+# 设计原则：**终端永远打印一份，弹窗只是加强提醒**。
+# 弹窗可能被别的窗口挡住、可能在非交互环境下根本不显示，
+# 如果它是唯一的渠道，使用者就会对着一个没反应的窗口发呆。
+# 所以这里永远先写到终端，再尝试弹窗；弹窗失败就退回终端交互。
+
+# 判断有没有可用的交互桌面。被 AI 代理或 CI 以重定向方式调起时为 false。
+$script:Interactive = $true
+try {
+  if ([Console]::IsInputRedirected -or $Host.Name -eq 'Default Host') { $script:Interactive = $false }
+} catch { $script:Interactive = $false }
+
+# MessageBox 不指定父窗口会被丢到别的窗口后面。用一个置顶的隐形窗口当 owner。
+function New-TopmostOwner {
+  $f = New-Object System.Windows.Forms.Form
+  $f.TopMost = $true; $f.ShowInTaskbar = $false
+  $f.StartPosition = 'CenterScreen'; $f.Size = New-Object Drawing.Size(1,1)
+  $f.Opacity = 0
+  $f.Show(); $f.Activate()
+  return $f
+}
+
+function Write-Banner { param($m, $hint)
+  Write-Host ''
+  Write-Host ('─' * 64) -Fore Yellow
+  Write-Host '  ⚠ 需要你操作' -Fore Yellow
+  Write-Host ('─' * 64) -Fore Yellow
+  foreach ($line in ($m -split "`n")) { Write-Host "  $line" }
+  if ($hint) { Write-Host ''; Write-Host "  $hint" -Fore Cyan }
+  Write-Host ('─' * 64) -Fore Yellow
+  Write-Log "PROMPT: $($m -replace "`n",' / ')"
+}
+
 function Dlg { param($m)
-  [System.Windows.Forms.MessageBox]::Show($m, '微信 AI 助手 安装',
-    'OK', 'Information') | Out-Null
+  Write-Banner $m '（屏幕上应该还会弹出一个窗口。如果没看到，就在这里按回车继续。）'
+  if ($script:Interactive) {
+    try {
+      $o = New-TopmostOwner
+      [System.Windows.Forms.MessageBox]::Show($o, $m, '微信 AI 助手 安装', 'OK', 'Information') | Out-Null
+      $o.Close(); return
+    } catch { Write-Log "dialog failed: $_" }
+  }
+  Read-Host '  按回车继续'
 }
+
 function AskYesNo { param($m)
-  $r = [System.Windows.Forms.MessageBox]::Show($m, '微信 AI 助手 安装',
-    'YesNo', 'Question')
-  return ($r -eq 'Yes')
+  Write-Banner $m '（屏幕上应该还会弹出一个窗口。没看到的话，在这里输入 y 或 n。）'
+  if ($script:Interactive) {
+    try {
+      $o = New-TopmostOwner
+      $r = [System.Windows.Forms.MessageBox]::Show($o, $m, '微信 AI 助手 安装', 'YesNo', 'Question')
+      $o.Close(); return ($r -eq 'Yes')
+    } catch { Write-Log "dialog failed: $_" }
+  }
+  return ((Read-Host '  要继续吗？(y/n)') -match '^[yY]')
 }
+
 function AskText { param($m)
-  return [Microsoft.VisualBasic.Interaction]::InputBox($m, '微信 AI 助手 安装', '')
+  Write-Banner $m '（屏幕上应该还会弹出一个输入框。没看到的话，直接在这里输入。）'
+  if ($script:Interactive) {
+    try {
+      $o = New-TopmostOwner
+      $v = [Microsoft.VisualBasic.Interaction]::InputBox($m, '微信 AI 助手 安装', '')
+      $o.Close()
+      if ($v) { return $v }
+    } catch { Write-Log "inputbox failed: $_" }
+  }
+  return (Read-Host '  请输入')
 }
 
 function Refresh-Path {
