@@ -187,6 +187,27 @@ openclaw agent --message "你好"     # 应该有回话
 
 ---
 
+
+## 改完脚本必须跑自检
+
+```bash
+python3 scripts/selfcheck.py
+```
+
+**不通过就不要提交。** 这个仓库已经有两次把跑不起来的脚本推上线的记录，
+两次都是批量替换时连带删掉了函数定义——`bash -n` 和「here-string 配对」
+这类检查对它完全无效，因为删掉函数定义在语法上是合法的。
+
+自检覆盖五类错误：
+
+| 检查 | 抓什么 |
+|---|---|
+| UTF-8 BOM | `.ps1` 丢 BOM → 中文 Windows 用 GBK 解析，汉字破坏引号闭合 |
+| bash 语法 | `bash -n` |
+| 未定义的函数 | **批量替换切掉函数定义**（前两次翻车的真正原因） |
+| here-string 配对 | PowerShell 的 `@"` / `"@` |
+| google provider 三件套 | `api` + `baseUrl` + 模型级 `api`，少一个就每次调用都失败 |
+
 ## 不要做的事
 
 - 不要用管理员权限（Administrator）运行安装或服务，必须保持当前普通用户权限。
