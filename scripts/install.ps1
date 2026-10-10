@@ -1,4 +1,4 @@
-# 微信 AI 助手 一键安装（Windows）
+﻿# 微信 AI 助手 一键安装（Windows）
 # 面向完全不懂代码的使用者：每一步都有中文说明，需要人工配合时会弹窗。
 
 $ErrorActionPreference = 'Continue'
@@ -81,7 +81,7 @@ Start-Sleep -Seconds 2
       -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$b64 `
       -PassThru -WindowStyle Normal -ErrorAction Stop
   } catch {
-    ER "弹不出新窗口：$($_.Exception.Message)"
+    Warn "弹不出新窗口：$($_.Exception.Message)"
     return $false
   }
   # 最多等 15 分钟（扫码二维码本身约 8 分钟就过期）
@@ -92,6 +92,74 @@ Start-Sleep -Seconds 2
   }
   return $true
 }
+
+# MessageBox 不指定父窗口会被丢到别的窗口后面。用一个置顶的隐形窗口当 owner。
+function New-TopmostOwner {
+  $f = New-Object System.Windows.Forms.Form
+  $f.TopMost = $true; $f.ShowInTaskbar = $false
+  $f.StartPosition = 'CenterScreen'; $f.Size = New-Object Drawing.Size(1,1)
+  $f.Opacity = 0
+  $f.Show(); $f.Activate()
+  return $f
+}
+
+function Write-Banner { param($m, $hint)
+  Write-Host ''
+  Write-Host ('─' * 64) -Fore Yellow
+  Write-Host '  ⚠ 需要你操作' -Fore Yellow
+  Write-Host ('─' * 64) -Fore Yellow
+  foreach ($line in ($m -split "`n")) { Write-Host "  $line" }
+  if ($hint) { Write-Host ''; Write-Host "  $hint" -Fore Cyan }
+  Write-Host ('─' * 64) -Fore Yellow
+  Write-Log "PROMPT: $($m -replace "`n",' / ')"
+}
+
+function Dlg { param($m)
+  Write-Banner $m '（屏幕上应该还会弹出一个窗口。如果没看到，就在这里按回车继续。）'
+  if ($script:Interactive) {
+    try {
+      $o = New-TopmostOwner
+      [System.Windows.Forms.MessageBox]::Show($o, $m, '微信 AI 助手 安装', 'OK', 'Information') | Out-Null
+      $o.Close(); return
+    } catch { Write-Log "dialog failed: $_" }
+  }
+  Read-Host '  按回车继续'
+}
+
+function AskYesNo { param($m)
+  Write-Banner $m '（屏幕上应该还会弹出一个窗口。没看到的话，在这里输入 y 或 n。）'
+  if ($script:Interactive) {
+    try {
+      $o = New-TopmostOwner
+      $r = [System.Windows.Forms.MessageBox]::Show($o, $m, '微信 AI 助手 安装', 'YesNo', 'Question')
+      $o.Close(); return ($r -eq 'Yes')
+    } catch { Write-Log "dialog failed: $_" }
+  }
+  return ((Read-Host '  要继续吗？(y/n)') -match '^[yY]')
+}
+
+function AskText { param($m)
+  Write-Banner $m '（屏幕上应该还会弹出一个输入框。没看到的话，直接在这里输入。）'
+  if ($script:Interactive) {
+    try {
+      $o = New-TopmostOwner
+      $v = [Microsoft.VisualBasic.Interaction]::InputBox($m, '微信 AI 助手 安装', '')
+      $o.Close()
+      if ($v) { return $v }
+    } catch { Write-Log "inputbox failed: $_" }
+  }
+  return (Read-Host '  请输入')
+}
+
+function Refresh-Path {
+  $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' +
+              [Environment]::GetEnvironmentVariable('Path','User')
+  foreach ($p in @("$env:USERPROFILE\.local\bin", "$env:LOCALAPPDATA\Programs")) {
+    if ((Test-Path $p) -and ($env:Path -notlike "*$p*")) { $env:Path = "$p;$env:Path" }
+  }
+}
+
+function Has { param($c) [bool](Get-Command $c -ErrorAction SilentlyContinue) }
 
 function Banner {
   Clear-Host
@@ -117,7 +185,7 @@ function Preflight {
   if ($v.Major -lt 10) { Die 'Windows 版本太旧，需要 Windows 10 或更新的系统' }
   OK "系统：Windows $($v.Major) ($env:PROCESSOR_ARCHITECTURE)"
 
-  Write-Log "=== 安装开始 $(Get-Date) ===""
+  Write-Log "=== 安装开始 $(Get-Date) ==="
 }
 
 
@@ -308,8 +376,8 @@ function Setup-GeminiKey {
   Start-Process 'https://aistudio.google.com/apikey'
 
   for ($i = 0; $i -lt 3; $i++) {
-    $key = (AskText '把复制到的密钥粘贴到下面（以 AIza 开头的那一长串）：') -replace '\s',''
-    if ($key -match '^(AIza[A-Za-z0-9_\-]{20,}|AQ\.[A-Za-z0-9_.\-]{20,})$') {
+    $key = (AskText '把复制到的密钥粘贴到下面（以 AIza 或 AQ. 开头的那一长串）：') -replace '\s',''
+    if ($key -match '^(AIza|AQ\.)[A-Za-z0-9_\-\.\=]{20,}$') {
       Say '  正在验证这把钥匙能不能用…'
       try {
         # 必须真发一次生成请求：列模型接口在额度为 0 时照样返回 200
@@ -318,7 +386,7 @@ function Setup-GeminiKey {
         $script:GeminiKey = $key
         OK '密钥验证通过'; return
       } catch { Warn '这把钥匙 Google 不认，可能是复制时少了几位' }
-    } else { Warn '格式不像（应该以 AIza 开头、很长一串）' }
+    } else { Warn '格式不像（应该以 AIza 或 AQ. 开头、很长一串）' }
   }
   Die '密钥试了 3 次都不对。可以稍后重新运行安装程序再来一次。'
 }
@@ -369,7 +437,7 @@ function Configure-Agent {
   #  · 指定 api  —— 一旦给 google 加了 models 数组，OpenClaw 会把它当成自定义
   #    provider，接口格式回落成 openai-responses，于是每次调用都失败
   #    （日志里会看到 `api=openai-responses model=...`）
-  $decl = '{"api":"google-generative-ai","models":[{"id":"' + $m + '","input":["text"],"contextWindow":1000000,"contextTokens":200000,"maxTokens":8192,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}}]}'
+  $decl = '{"api":"google-generative-ai","baseUrl":"https://generativelanguage.googleapis.com/v1beta","models":[{"id":"' + $m + '","name":"' + $m + '","api":"google-generative-ai","input":["text"],"contextWindow":1000000,"contextTokens":200000,"maxTokens":8192,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}}]}'
   openclaw config set models.providers.google $decl --strict-json --merge *>> $Log
   openclaw config set agents.defaults.model.primary "google/$m" *>> $Log
   openclaw config set memory.search.enabled false *>> $Log
@@ -494,7 +562,7 @@ function Login-WeChat {
   Start-Sleep -Seconds 3
   if ((openclaw channels status 2>$null | Out-String) -match 'openclaw-weixin') {
     OK '微信连上了'
-  } else { Warn '没检测到微信连接，可以稍后重新运行安装程序' }
+  } else { Warn '没检测到微信连接。如果二维码过期或没扫上，可以重新运行安装程序，或单独运行 扫码登录-Windows.bat 扫码。' }
 }
 
 # ── 8. 绘画（可选，要钱）─────────────────────────────────────────────────

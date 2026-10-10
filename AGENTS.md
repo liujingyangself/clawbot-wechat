@@ -163,12 +163,20 @@ openclaw agent --message "你好"     # 应该有回话
 - **`openclaw config set ... model.primary` 报 `Unknown model`**：OpenClaw 自己的模型目录
   常常只认一两个 google 模型，`flash-lite` 往往不在里面，`models list --refresh` 也补不上。
   解法是先把模型显式声明进 `models.providers.google.models[]`，再设 primary。
-- **声明了模型之后反而每次调用都失败**：给 `google` 加上 `models` 数组会让 OpenClaw
-  把它当成自定义 provider，接口格式回落成 OpenAI 的，日志里能看到
-  `[responses] error provider=google api=openai-responses`。
-  **必须同时设 `models.providers.google.api = "google-generative-ai"`。**
-  这两件事要一起做，少一个都跑不通。安装器已经这么做了。
-
+- **声明了模型之后报错 `Provider "google" requires an explicit base URL` 或调用失败**：给 `google`
+  加上 `models` 数组会让 OpenClaw 把它当成自定义 provider，接口格式回落成 OpenAI 的
+  `openai-responses` 并要求显式提供 baseUrl。
+  **必须同时设 `models.providers.google.api = "google-generative-ai"` 和 `models.providers.google.baseUrl = "https://generativelanguage.googleapis.com/v1beta"`，且数组内的模型对象也必须包含 `api: "google-generative-ai"`。**
+  安装脚本已完全固化这一做法。
+- **Windows PowerShell 5.1 解析报错（`The string is missing the terminator`）**：
+  中文 Windows 默认使用 GBK/CP936 代码页解析无 BOM 的 `.ps1` 文件，多字节汉字会破坏引号与花括号闭合。
+  **仓库中所有 `.ps1` 脚本必须严格保存为带 BOM 的 UTF-8（UTF-8 with BOM）**。
+- **Google API Key 前缀不仅是 `AIza`**：
+  Google AI Studio 最新生成的 API Key 采用 `AQ.` 开头（如 `AQ.AbXXXXXXXX...`），必须同时放行 `AIza` 和 `AQ.` 前缀。
+- **微信二维码在 AI 代理环境中不可见或已过期**：
+  在代理环境中，终端标准输出被捕获，使用者看不到 ASCII 二维码。你可以提取命令输出中的登录直链（`https://liteapp.weixin.qq.com/q/...`）提供给使用者在手机微信中直接打开，或者告知使用者直接双击根目录下的 `扫码登录-Windows.bat`（Mac 为 `扫码登录-Mac.command`）弹出独立窗口扫码。
+- **Windows 上服务权限错位**：
+  绝不要提升为管理员（Run as Administrator）运行安装或启动服务！以管理员运行会导致 OpenClaw 计划任务注册到 Administrator 账户下，而使用者微信登录态存在普通用户目录，导致服务永远读取不到登录状态，微信消息毫无反应。
 - **`openclaw` 装完找不到命令**：PATH 没刷新。macOS 新开一个终端窗口；
   Windows 用 `Refresh-Path`（脚本里有这个函数）或重开 PowerShell。
 - **agy 权限配置写了但工具还是全被拒**：检查 `~/.gemini/antigravity-cli/settings.json`
@@ -181,7 +189,9 @@ openclaw agent --message "你好"     # 应该有回话
 
 ## 不要做的事
 
+- 不要用管理员权限（Administrator）运行安装或服务，必须保持当前普通用户权限。
 - 不要改成 `--dangerously-skip-permissions`。这个 bot 微信能触达，等于把电脑交出去。
 - 不要把 `groupPolicy` 改成 open。群聊是最大的提示词注入面。
 - 不要把使用者的 API key 打印到对话里或日志里。
 - 不要替使用者决定开不开通画图——那是花钱的事，必须他自己点。
+- 修改 `.ps1` 时不要去掉 UTF-8 BOM，否则 Windows PowerShell 5.1 必然语法报错。

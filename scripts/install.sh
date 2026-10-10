@@ -78,6 +78,62 @@ run_visible() {  # run_visible <标题> <命令> <提示>
   return 0
 }
 
+esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+
+banner_prompt() {  # banner_prompt <正文> <提示行>
+  printf '\n%s%s%s\n' "$Y" "$(printf '─%.0s' $(seq 1 60))" "$N"
+  printf '%s  ⚠ 需要你操作%s\n' "$Y$B" "$N"
+  printf '%s%s%s\n' "$Y" "$(printf '─%.0s' $(seq 1 60))" "$N"
+  printf '%s\n' "$1" | while IFS= read -r l; do printf '  %s\n' "$l"; done
+  [[ -n "${2:-}" ]] && printf '\n%s  %s%s\n' "$G" "$2" "$N"
+  printf '%s%s%s\n' "$Y" "$(printf '─%.0s' $(seq 1 60))" "$N"
+  log "PROMPT: $(printf '%s' "$1" | tr '\n' ' ')"
+}
+
+dialog() {  # dialog <正文>
+  banner_prompt "$1" "（屏幕上应该还会弹出一个窗口。没看到的话，在这里按回车继续。）"
+  if (( INTERACTIVE )); then
+    osascript -e "display dialog \"$(esc "$1")\" buttons {\"知道了\"} \
+      default button \"知道了\" with title \"微信 AI 助手 安装\"" >/dev/null 2>&1 && return 0
+  fi
+  read -r -p "  按回车继续 " _ || true
+}
+
+ask_yes_no() {  # ask_yes_no <正文> → 0=是 1=否
+  banner_prompt "$1" "（屏幕上应该还会弹出一个窗口。没看到的话，在这里输入 y 或 n。）"
+  if (( INTERACTIVE )); then
+    local out
+    out="$(osascript -e "display dialog \"$(esc "$1")\" buttons {\"跳过\",\"好\"} \
+      default button \"好\" with title \"微信 AI 助手 安装\"" 2>/dev/null)" && {
+      printf '%s' "$out" | grep -q "好" && return 0 || return 1
+    }
+  fi
+  local a; read -r -p "  要继续吗？(y/n) " a || true
+  [[ "$a" =~ ^[yY] ]]
+}
+
+ask_text() {  # ask_text <正文> → stdout = 使用者输入
+  banner_prompt "$1" "（屏幕上应该还会弹出一个输入框。没看到的话，直接在这里输入。）" >&2
+  if (( INTERACTIVE )); then
+    local out
+    out="$(osascript -e "display dialog \"$(esc "$1")\" default answer \"\" \
+      buttons {\"取消\",\"确定\"} default button \"确定\" \
+      with title \"微信 AI 助手 安装\"" 2>/dev/null)" && {
+      local v; v="$(printf '%s' "$out" | sed -n 's/.*text returned:\(.*\)$/\1/p')"
+      [[ -n "$v" ]] && { printf '%s' "$v"; return 0; }
+    }
+  fi
+  local a; read -r -p "  请输入： " a <&0 || true
+  printf '%s' "${a:-}"
+}
+
+pick_jsonrt() {
+  if command -v node >/dev/null 2>&1; then JSONRT=node
+  elif [[ -x /usr/bin/python3 ]] && /usr/bin/python3 -c '' 2>/dev/null; then JSONRT=/usr/bin/python3
+  else JSONRT=""; fi
+  log "json runtime: ${JSONRT:-none}"
+}
+
 banner() {
   clear
   cat <<'BANNER'
@@ -310,7 +366,7 @@ setup_gemini_key() {
 
   local key tries=0
   while (( tries < 3 )); do
-    key="$(ask_text "把复制到的密钥粘贴到下面（以 AIza 开头的那一长串）：")"
+    key="$(ask_text "把复制到的密钥粘贴到下面（以 AIza 或 AQ. 开头的那一长串）：")"
     key="$(printf '%s' "${key:-}" | tr -d '[:space:]')"
     if [[ "$key" =~ ^(AIza[A-Za-z0-9_-]{20,}|AQ\.[A-Za-z0-9_.-]{20,})$ ]]; then
       say "  正在验证这把钥匙能不能用…"
@@ -325,7 +381,7 @@ setup_gemini_key() {
       fi
       warn "这把钥匙 Google 不认，可能是复制时少了几位"
     else
-      warn "格式不像（应该以 AIza 开头、很长一串）"
+      warn "格式不像（应该以 AIza 或 AQ. 开头、很长一串）"
     fi
     (( tries++ ))
   done
@@ -380,7 +436,7 @@ configure_agent() {
   #    provider，接口格式回落成 openai-responses，于是每次调用都失败
   #    （日志里会看到 `api=openai-responses model=...`）
   openclaw config set models.providers.google \
-    "{\"api\":\"google-generative-ai\",\"models\":[{\"id\":\"$m\",\"input\":[\"text\"],\"contextWindow\":1000000,\"contextTokens\":200000,\"maxTokens\":8192,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0}}]}" \
+    "{\"api\":\"google-generative-ai\",\"baseUrl\":\"https://generativelanguage.googleapis.com/v1beta\",\"models\":[{\"id\":\"$m\",\"name\":\"$m\",\"api\":\"google-generative-ai\",\"input\":[\"text\"],\"contextWindow\":1000000,\"contextTokens\":200000,\"maxTokens\":8192,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0}}]}" \
     --strict-json --merge >>"$LOG" 2>&1 || true
   openclaw config set agents.defaults.model.primary "google/$m" >>"$LOG" 2>&1 || true
   openclaw config set memory.search.enabled false >>"$LOG" 2>&1 || true
@@ -518,7 +574,7 @@ login_wechat() {
     "请用手机微信「扫一扫」扫下面的二维码，然后在手机上确认" || warn "扫码流程没有正常完成"
   sleep 3
   openclaw channels status 2>/dev/null | grep -q "openclaw-weixin" \
-    && ok "微信连上了" || warn "没检测到微信连接，可以稍后重新运行安装程序"
+    && ok "微信连上了" || warn "没检测到微信连接。如果二维码过期或没扫上，可以稍后重新运行安装程序，或单独运行 扫码登录-Mac.command 扫码。"
 }
 
 # ── 8. 绘画（可选，要钱）─────────────────────────────────────────────────

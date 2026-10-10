@@ -1,4 +1,4 @@
-# 给 Antigravity CLI 配一套有界的权限，避免它读到密钥或动系统。（Windows）
+﻿# 给 Antigravity CLI 配一套有界的权限，避免它读到密钥或动系统。（Windows）
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 

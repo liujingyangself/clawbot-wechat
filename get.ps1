@@ -1,4 +1,4 @@
-# 一行安装的引导脚本（Windows）
+﻿# 一行安装的引导脚本（Windows）
 #
 #   irm https://raw.githubusercontent.com/liujingyangself/clawbot-wechat/main/get.ps1 | iex
 #
@@ -12,15 +12,15 @@ $Repo   = 'liujingyangself/clawbot-wechat'
 $Branch = if ($env:CLAWBOT_BRANCH) { $env:CLAWBOT_BRANCH } else { 'main' }
 $Dest   = if ($env:CLAWBOT_DIR)    { $env:CLAWBOT_DIR }    else { Join-Path $env:USERPROFILE 'clawbot-wechat' }
 
-function Die { param($m) Write-Host "✗ $m" -Fore Red; Read-Host '按回车键关闭'; exit 1 }
+function Die { param($m) Write-Host "✗ $m" -Fore Red; if (-not [Console]::IsInputRedirected) { Read-Host '按回车键关闭' }; exit 1 }
 
 Write-Host ''
 Write-Host '微信 AI 助手 · 正在准备安装' -Fore Cyan
 Write-Host ''
 
-# 安装过程要扫二维码、要在 Antigravity 登录界面按键，必须有真正的控制台。
-if ($Host.Name -eq 'Default Host' -or [Console]::IsInputRedirected) {
-  Die '需要在 PowerShell 窗口里运行。请在开始菜单搜索 PowerShell 打开，再把那条命令粘进去回车。'
+# 若在 AI 代理或非交互环境执行，主安装脚本会自动通过 Invoke-Visible 弹出独立可见窗口
+if ($Host.Name -eq 'Default Host' -and -not [Console]::IsInputRedirected) {
+  Write-Host '  提示：建议在标准的 PowerShell 窗口里运行以获得最佳显示效果。' -Fore Yellow
 }
 
 # TLS 1.2：Windows PowerShell 5.1 默认可能谈不下来 GitHub 的连接

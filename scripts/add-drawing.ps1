@@ -1,4 +1,4 @@
-# 单独开通「画图」功能。需要 Google 已开通计费（图像生成没有免费额度）。
+﻿# 单独开通「画图」功能。需要 Google 已开通计费（图像生成没有免费额度）。
 $ErrorActionPreference = 'Continue'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 Add-Type -AssemblyName System.Windows.Forms

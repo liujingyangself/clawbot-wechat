@@ -71,7 +71,9 @@ irm https://raw.githubusercontent.com/liujingyangself/clawbot-wechat/main/get.ps
 
 - **Mac** 双击 `安装-Mac.command`
   （第一次会提示「无法验证开发者」→ 右键点它 → 选「打开」→ 再点一次「打开」）
-- **Windows** 双击 `安装-Windows.bat`
+- **Windows** 双击 `安装-Windows.bat`（直接双击运行，**不要以管理员身份运行**）
+
+> 💡 **小提示**：如果日后微信掉线或需要重新扫码，直接双击根目录下的 **`扫码登录-Windows.bat`**（Mac 为 **`扫码登录-Mac.command`**）即可单独登录，无需重走安装流程。
 
 ---
 
@@ -85,7 +87,7 @@ irm https://raw.githubusercontent.com/liujingyangself/clawbot-wechat/main/get.ps
 | 顺序 | 你要做什么 | 多久 | 重要性 |
 |---|---|---|---|
 | 1 | **用 Google 账号登录 Antigravity**（会打开浏览器） | 2 分钟 | ⚠️ **最关键，别跳过** |
-| 2 | 去一个网页复制一串密钥贴回来 | 2 分钟 | 备用通道 |
+| 2 | 去一个网页复制一串密钥贴回来（以 `AIza` 或 `AQ.` 开头） | 2 分钟 | 备用通道 |
 | 3 | 用**手机微信扫二维码** | 半分钟 | 必需 |
 
 全程大约 10–20 分钟，大部分时间是电脑自己在下载东西，你可以去干别的。
