@@ -77,18 +77,25 @@ Start-Sleep -Seconds 2
 "@
   $b64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($inner))
   try {
-    $proc = Start-Process -FilePath 'powershell.exe' `
-      -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$b64 `
-      -PassThru -WindowStyle Normal -ErrorAction Stop
+    # 在非交互或重定向环境中（例如由 AI 代理调起），普通 Start-Process 无法分配前台控制台；
+    # 借助 cmd.exe /c start 强制创建独立的前台桌面控制台。
+    $proc = Start-Process -FilePath 'cmd.exe' `
+      -ArgumentList '/c', 'start', '/wait', "`"$Title`"", 'powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $b64 `
+      -PassThru -Wait -ErrorAction Stop
   } catch {
-    Warn "弹不出新窗口：$($_.Exception.Message)"
-    return $false
-  }
-  # 最多等 15 分钟（扫码二维码本身约 8 分钟就过期）
-  if (-not $proc.WaitForExit(900000)) {
-    try { $proc.Kill() } catch {}
-    Warn "$Title 超时了"
-    return $false
+    try {
+      $proc = Start-Process -FilePath 'powershell.exe' `
+        -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$b64 `
+        -PassThru -WindowStyle Normal -ErrorAction Stop
+      if (-not $proc.WaitForExit(900000)) {
+        try { $proc.Kill() } catch {}
+        Warn "$Title 超时了"
+        return $false
+      }
+    } catch {
+      Warn "弹不出新窗口：$($_.Exception.Message)"
+      return $false
+    }
   }
   return $true
 }
@@ -467,7 +474,21 @@ function Install-Agy {
   if ((Test-Path $settings) -and ((Get-Content $settings -Raw) -match '"permissions"')) {
     OK '已经登录并配置过了'
   } else {
-    Dlg @"
+    # 先做轻量静默探测：如果 agy -p 能够正常输出，说明当前机器已有有效凭据，直接自动补齐配置，无需在传统控制台里与 TUI 交互
+    $hasSession = $false
+    try {
+      $probe = agy -p "ping" 2>$null
+      if ($LASTEXITCODE -eq 0 -and $probe) { $hasSession = $true }
+    } catch {}
+
+    if ($hasSession) {
+      $onboard = Join-Path $env:USERPROFILE '.gemini\antigravity-cli\cache\onboarding.json'
+      New-Item -ItemType Directory -Force -Path (Split-Path $onboard) | Out-Null
+      '{"consumerOnboardingComplete":true,"enterpriseOnboardingComplete":true,"onboardingComplete":true}' | Set-Content $onboard -Encoding utf8
+      if (-not (Test-Path $settings)) { '{"theme":"terminal"}' | Set-Content $settings -Encoding utf8 }
+      OK '检测到 Antigravity 登录凭据有效，已自动完成配置'
+    } else {
+      Dlg @"
 现在装助手的主力大脑：Antigravity。
 
 这一步是整个安装里最重要的 —— 它用你的 Google 账号，
