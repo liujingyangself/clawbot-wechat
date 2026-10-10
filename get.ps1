@@ -30,15 +30,43 @@ $tmp = Join-Path $env:TEMP ("clawbot-" + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 $zip = Join-Path $tmp 'src.zip'
 
+$tarUrl = "https://codeload.github.com/$Repo/zip/refs/heads/$Branch"
+$downloaded = $false
+
+Write-Host '  正在下载安装包…'
 try {
-  Write-Host '  正在下载安装包…'
-  Invoke-WebRequest -Uri "https://codeload.github.com/$Repo/zip/refs/heads/$Branch" `
-    -OutFile $zip -UseBasicParsing -TimeoutSec 120
+  Invoke-WebRequest -Uri $tarUrl -OutFile $zip -UseBasicParsing -TimeoutSec 120
+  $downloaded = $true
 } catch {
-  Die '下载失败。检查网络（在中国大陆可能需要先开代理），然后重新运行。'
+  # 直连不行，找找本机的代理软件再试一次（国内常见情况）
+  Write-Host '  直连失败，正在找你电脑上的代理软件…'
+  $cands = @('http://127.0.0.1:7890','http://127.0.0.1:7897','http://127.0.0.1:10809',
+             'http://127.0.0.1:1087','http://127.0.0.1:8889','http://127.0.0.1:2080')
+  # 系统代理设置里写的那个也试一下（Clash 的「系统代理」开关就是改这里）
+  try {
+    $reg = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -ErrorAction Stop
+    if ($reg.ProxyEnable -eq 1 -and $reg.ProxyServer) {
+      $s = $reg.ProxyServer; if ($s -notmatch '://') { $s = "http://$s" }
+      $cands = @($s) + $cands
+    }
+  } catch {}
+  foreach ($u in $cands) {
+    try {
+      Invoke-WebRequest -Uri $tarUrl -OutFile $zip -UseBasicParsing -TimeoutSec 90 -Proxy $u
+      Write-Host "  ✓ 通过代理下载成功（$u）" -Fore Green
+      # 传给安装脚本，省得它再探一遍
+      $env:HTTP_PROXY = $u; $env:HTTPS_PROXY = $u
+      $env:http_proxy = $u; $env:https_proxy = $u
+      $env:NO_PROXY = 'localhost,127.0.0.1,::1'; $env:no_proxy = $env:NO_PROXY
+      $downloaded = $true
+      break
+    } catch { }
+  }
 }
 
-if (-not (Test-Path $zip) -or (Get-Item $zip).Length -eq 0) { Die '下载下来是空的，请重试。' }
+if (-not $downloaded -or -not (Test-Path $zip) -or (Get-Item $zip).Length -eq 0) {
+  Die '下载失败。如果你在中国大陆，请先打开代理软件（Clash、v2rayN 这类），确认浏览器能打开 google.com，然后重新运行这条命令。'
+}
 
 try {
   Expand-Archive -Path $zip -DestinationPath $tmp -Force

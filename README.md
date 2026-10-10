@@ -23,6 +23,39 @@ irm https://raw.githubusercontent.com/liujingyangself/clawbot-wechat/main/get.ps
 
 就这一条。它会自动下载、安装、然后在需要你帮忙的时候弹窗提醒。
 
+### 在中国大陆的话
+
+**只有这台电脑需要能连外网，手机不用。** 你的手机微信照常用国内网络就行。
+
+需要连外网的是电脑上这几件事：下载安装包、用 Google 的 AI、Antigravity 登录。
+微信消息本身走的是腾讯的国内服务器，不需要也不会绕到国外。
+
+安装前**先打开你的代理软件**（Clash、v2rayN 这类），确认浏览器能打开 google.com，
+然后再跑安装命令。安装程序会**自动找到你的代理并配置好**，不用你填端口。
+
+> **为什么不能只开「系统代理」就完事**
+>
+> 开了系统代理，浏览器能上 Google，看起来一切正常。但助手的后台程序
+> （Node.js）**不读系统代理设置**，照样连不上，而且报的错完全看不出是网络问题。
+>
+> 所以安装程序会专门探测你的代理端口，把它写进助手自己的配置里。
+> 这一步是自动的，你不用管——知道有这回事就行。
+
+如果那条一行安装命令本身就下载不动（GitHub 在国内也经常连不上），
+在命令前面加上代理再跑（把 7890 换成你软件里显示的端口）：
+
+```bash
+export https_proxy=http://127.0.0.1:7890 http_proxy=http://127.0.0.1:7890
+curl -fsSL https://raw.githubusercontent.com/liujingyangself/clawbot-wechat/main/get.sh | bash
+```
+
+Windows 的 PowerShell 里是：
+
+```powershell
+$env:HTTPS_PROXY='http://127.0.0.1:7890'; $env:HTTP_PROXY=$env:HTTPS_PROXY
+irm https://raw.githubusercontent.com/liujingyangself/clawbot-wechat/main/get.ps1 | iex
+```
+
 ### 或者：让 AI 帮你装
 
 如果你电脑上有 Antigravity、Claude、Cursor 这类 AI 助手，直接跟它说：

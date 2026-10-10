@@ -30,12 +30,24 @@ command -v tar  >/dev/null 2>&1 || die "没有 tar，无法解压。"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-echo "  正在下载安装包…"
-curl -fsSL --retry 3 --retry-delay 2 --max-time 120 \
-  "https://codeload.github.com/$REPO/tar.gz/refs/heads/$BRANCH" -o "$TMP/src.tgz" \
-  || die "下载失败。检查网络（在中国大陆可能需要先开代理），然后重新运行。"
+TARBALL="https://codeload.github.com/$REPO/tar.gz/refs/heads/$BRANCH"
 
-[[ -s "$TMP/src.tgz" ]] || die "下载下来是空的，请重试。"
+echo "  正在下载安装包…"
+if ! curl -fsSL --retry 2 --retry-delay 2 --max-time 120 "$TARBALL" -o "$TMP/src.tgz" 2>/dev/null; then
+  # 直连不行，找找本机的代理软件再试一次（国内常见情况）
+  echo "  直连失败，正在找你电脑上的代理软件…"
+  for u in http://127.0.0.1:7890 http://127.0.0.1:7897 http://127.0.0.1:1087 \
+           http://127.0.0.1:10809 http://127.0.0.1:8889 http://127.0.0.1:6152; do
+    if curl -fsSL --max-time 60 -x "$u" "$TARBALL" -o "$TMP/src.tgz" 2>/dev/null; then
+      echo "  ✓ 通过代理下载成功（$u）"
+      # 传给安装脚本，省得它再探一遍
+      export http_proxy="$u" https_proxy="$u" HTTP_PROXY="$u" HTTPS_PROXY="$u"
+      export no_proxy="localhost,127.0.0.1,::1" NO_PROXY="localhost,127.0.0.1,::1"
+      break
+    fi
+  done
+fi
+[[ -s "$TMP/src.tgz" ]] || die "下载失败。如果你在中国大陆，请先打开代理软件（Clash、v2rayN 这类），确认浏览器能打开 google.com，然后重新运行这条命令。"
 
 # 重装时先清掉旧的，避免新旧文件混在一起
 if [[ -d "$DEST" ]]; then

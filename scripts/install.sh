@@ -73,18 +73,144 @@ preflight() {
   [[ "$(uname -s)" == "Darwin" ]] || die "这个脚本只能在 Mac 上跑。Windows 请用 安装-Windows.bat"
   ok "系统：macOS $(sw_vers -productVersion) ($(uname -m))"
 
-  if ! curl -fsS --max-time 10 -o /dev/null https://www.google.com 2>/dev/null; then
-    warn "连不上 Google。安装需要访问 Google 和 npm，请确认网络（可能需要代理）。"
-    ask_yes_no "检测到连不上 Google。
-
-安装过程需要下载 Google 的工具，如果你在中国大陆，
-可能需要先打开代理软件。
-
-现在继续，还是先去开代理？" || die "请开好网络后重新双击安装"
-  else
-    ok "网络正常"
-  fi
   log "=== 安装开始 $(date) ==="
+}
+
+
+# ── 代理（中国大陆几乎必需）──────────────────────────────────────────────
+# 这里要解决的是一个很坑的情况：使用者开着 Clash 的「系统代理」，浏览器能上
+# Google，于是以为网络没问题；但 Node.js 不读系统代理，OpenClaw 的后台服务
+# 照样连不上 Gemini，报的错还完全看不出是代理问题。
+PROXY_URL=""
+
+# 常见客户端的默认 HTTP 代理端口。只探测 http://，因为 OpenClaw 的
+# proxy.proxyUrl 只接受 http(s)://，不支持 socks5。
+proxy_candidates() {
+  cat <<'PORTS'
+http://127.0.0.1:7890
+http://127.0.0.1:7897
+http://127.0.0.1:1087
+http://127.0.0.1:10809
+http://127.0.0.1:8889
+http://127.0.0.1:6152
+http://127.0.0.1:8080
+http://127.0.0.1:2080
+PORTS
+}
+
+google_reachable() {  # google_reachable [代理地址]
+  if [[ -n "${1:-}" ]]; then
+    curl -fsS --max-time 8 -x "$1" -o /dev/null https://www.google.com 2>/dev/null
+  else
+    curl -fsS --max-time 8 -o /dev/null https://www.google.com 2>/dev/null
+  fi
+}
+
+detect_proxy() {
+  # 先看系统代理设置里写了什么（macOS）
+  local sys_host sys_port
+  sys_host="$(scutil --proxy 2>/dev/null | awk '/HTTPProxy/{print $3}' | head -1)"
+  sys_port="$(scutil --proxy 2>/dev/null | awk '/HTTPPort/{print $3}'  | head -1)"
+  if [[ -n "${sys_host:-}" && -n "${sys_port:-}" ]]; then
+    local u="http://$sys_host:$sys_port"
+    google_reachable "$u" && { echo "$u"; return 0; }
+  fi
+  # 再挨个试常见端口
+  local u
+  while IFS= read -r u; do
+    [[ -z "$u" ]] && continue
+    google_reachable "$u" && { echo "$u"; return 0; }
+  done < <(proxy_candidates)
+  return 1
+}
+
+apply_proxy_env() {  # 让本脚本后续所有 curl / 安装器都走代理
+  export http_proxy="$PROXY_URL"  https_proxy="$PROXY_URL"
+  export HTTP_PROXY="$PROXY_URL"  HTTPS_PROXY="$PROXY_URL"
+  export no_proxy="localhost,127.0.0.1,::1"
+  export NO_PROXY="$no_proxy"
+  log "proxy in use: $PROXY_URL"
+}
+
+setup_proxy() {
+  step "检查能不能连上 Google"
+
+  # get.sh 可能已经探到代理并通过环境变量传下来了。
+  # 如果不先认领它，下面的 curl 会因为带着环境变量而成功，
+  # 于是误判成「能直连」，代理就不会被写进 OpenClaw 的配置。
+  local inherited="${https_proxy:-${HTTPS_PROXY:-}}"
+  if [[ -n "$inherited" ]]; then
+    PROXY_URL="$inherited"; apply_proxy_env
+    ok "沿用上一步探到的代理：$PROXY_URL"
+    return
+  fi
+
+  if google_reachable; then ok "能直连，不需要代理"; return; fi
+
+  warn "连不上 Google"
+  say "  正在自动寻找你电脑上的代理软件…"
+  local found; found="$(detect_proxy || true)"
+
+  if [[ -n "$found" ]]; then
+    PROXY_URL="$found"; apply_proxy_env
+    ok "找到可用代理：$PROXY_URL"
+    dialog "检测到你在用代理软件，地址是：
+
+    $PROXY_URL
+
+我会让助手也走这个代理，这样它才能用上 Google 的 AI。
+
+（微信的消息不会绕到国外——代理软件会自己按规则分流，
+国内的网站和微信走直连。）"
+    return
+  fi
+
+  # 没探到：要么没开代理，要么开的是 socks 或者非常见端口
+  dialog "连不上 Google，而且没找到正在运行的代理软件。
+
+请先打开你的代理软件（Clash、v2rayN 这类），
+确认浏览器能打开 google.com，然后点「知道了」继续。
+
+如果你的软件只开了 socks5 端口，需要在它的设置里
+把「HTTP 代理」也打开——这个助手只能用 HTTP 代理。"
+
+  found="$(detect_proxy || true)"
+  if [[ -n "$found" ]]; then
+    PROXY_URL="$found"; apply_proxy_env; ok "找到了：$PROXY_URL"; return
+  fi
+
+  local manual
+  manual="$(ask_text "还是没找到。请手动填写代理端口号（只填数字，在你代理软件的设置里能看到，常见的是 7890）：")"
+  manual="$(printf '%s' "${manual:-}" | tr -cd '0-9')"
+  if [[ -n "$manual" ]]; then
+    local u="http://127.0.0.1:$manual"
+    if google_reachable "$u"; then
+      PROXY_URL="$u"; apply_proxy_env; ok "代理可用：$PROXY_URL"; return
+    fi
+    warn "通过 127.0.0.1:$manual 还是连不上 Google"
+  fi
+  die "没有可用的网络。请先确保代理软件正常工作（浏览器能打开 google.com），再重新运行安装程序。"
+}
+
+# OpenClaw 装好之后，把代理写进它自己的配置。
+# 必须写进 config——只设环境变量的话，后台服务重装时会丢。
+configure_openclaw_proxy() {
+  [[ -z "$PROXY_URL" ]] && return 0
+  step "让助手也走代理"
+  openclaw config set proxy.proxyUrl "$PROXY_URL" >>"$LOG" 2>&1     || { warn "写入代理配置失败"; return; }
+  # agy 是 Go 程序，会读 HTTPS_PROXY；把它写进服务的持久环境，
+  # 这样后台服务拉起 agy 的时候也能走代理。
+  local envf="$HOME/.openclaw/.env"
+  mkdir -p "$(dirname "$envf")"
+  if [[ -f "$envf" ]]; then
+    grep -v -E '^(HTTPS?_PROXY|NO_PROXY)=' "$envf" > "$envf.tmp" 2>/dev/null && mv "$envf.tmp" "$envf"
+  fi
+  {
+    echo "HTTP_PROXY=$PROXY_URL"
+    echo "HTTPS_PROXY=$PROXY_URL"
+    echo "NO_PROXY=localhost,127.0.0.1,::1"
+  } >> "$envf"
+  ok "助手的网络已指向 $PROXY_URL"
 }
 
 # ── 1. OpenClaw（助手的运行底座，自带 Node）──────────────────────────────
@@ -266,7 +392,11 @@ install_agy() {
 start_gateway() {
   step "让助手开机自动运行"
   openclaw config set gateway.mode local >>"$LOG" 2>&1 || true
-  openclaw gateway install >>"$LOG" 2>&1 || true
+  if [[ -n "$PROXY_URL" ]]; then
+    openclaw gateway install --force >>"$LOG" 2>&1 || true
+  else
+    openclaw gateway install >>"$LOG" 2>&1 || true
+  fi
   openclaw gateway restart >>"$LOG" 2>&1 || true
   sleep 8
   openclaw gateway status 2>/dev/null | grep -q "running" \
@@ -337,6 +467,42 @@ verify() {
   openclaw gateway status 2>/dev/null | grep -q running && ok "服务在跑" || { warn "服务没在跑"; bad=1; }
   openclaw channels status 2>/dev/null | grep -q weixin  && ok "微信已连"  || { warn "微信没连上"; bad=1; }
   command -v agy >/dev/null && ok "Antigravity 可用" || warn "Antigravity 没装上（不影响聊天）"
+  # 先单独验证到 Gemini 的通路。不这么做的话，代理没配通会表现成
+  # 「助手不回话」，使用者完全猜不到是网络问题。
+  local gkey
+  gkey="$(openclaw config get models.providers.google.apiKey 2>/dev/null \
+          | grep -o 'AIza[A-Za-z0-9_-]*' | head -1)"
+  if [[ -n "${gkey:-}" ]]; then
+    if curl -fsS --max-time 25 \
+        "https://generativelanguage.googleapis.com/v1beta/models?key=$gkey" \
+        >/dev/null 2>&1; then
+      ok "能连上 Google 的 AI 服务"
+    else
+      warn "连不上 Google 的 AI 服务"
+      bad=1
+      if [[ -n "$PROXY_URL" ]]; then
+        dialog "助手装好了，但连不上 Google 的 AI 服务。
+
+这是**网络问题，不是助手坏了**。
+
+你的代理是：$PROXY_URL
+
+请检查：
+1. 代理软件还开着吗？
+2. 浏览器能打开 google.com 吗？
+
+代理软件重启后端口可能会变。端口变了的话，
+重新运行一次安装程序就会自动重新探测。"
+      else
+        dialog "助手装好了，但连不上 Google 的 AI 服务。
+
+这是**网络问题，不是助手坏了**。
+
+如果你在中国大陆，需要先打开代理软件（Clash、v2rayN 这类），
+然后重新运行一次安装程序，它会自动探测并配置好。"
+      fi
+    fi
+  fi
   say ""
   say "  正在让助手回一句话试试（可能要等十几秒）…"
   local reply
@@ -348,8 +514,10 @@ verify() {
 # ── main ─────────────────────────────────────────────────────────────────
 banner
 preflight
+setup_proxy
 pick_jsonrt
 install_openclaw
+configure_openclaw_proxy
 pick_jsonrt
 install_wechat_plugin
 setup_gemini_key

@@ -72,15 +72,134 @@ function Preflight {
   if ($v.Major -lt 10) { Die 'Windows 版本太旧，需要 Windows 10 或更新的系统' }
   OK "系统：Windows $($v.Major) ($env:PROCESSOR_ARCHITECTURE)"
 
-  try { Invoke-WebRequest -Uri 'https://www.google.com' -TimeoutSec 10 -UseBasicParsing | Out-Null
-        OK '网络正常' }
-  catch {
-    Warn '连不上 Google'
-    if (-not (AskYesNo "检测到连不上 Google。`n`n安装过程需要下载 Google 的工具，如果你在中国大陆，可能需要先打开代理软件。`n`n现在继续吗？（点「否」去开代理）")) {
-      Die '请开好网络后重新运行安装程序'
+  Write-Log "=== 安装开始 $(Get-Date) ===""
+}
+
+
+# ── 代理（中国大陆几乎必需）──────────────────────────────────────────────
+# 要解决的坑：使用者开着 Clash 的「系统代理」，浏览器能上 Google，以为网络没问题；
+# 但 Node.js 不读系统代理，OpenClaw 的后台服务照样连不上 Gemini，
+# 报的错还完全看不出是代理问题。
+$script:ProxyUrl = ''
+
+# 只探 http://：OpenClaw 的 proxy.proxyUrl 不支持 socks5
+$script:ProxyCandidates = @(
+  'http://127.0.0.1:7890',   # Clash / Clash for Windows
+  'http://127.0.0.1:7897',   # Clash Verge Rev
+  'http://127.0.0.1:10809',  # v2rayN
+  'http://127.0.0.1:1087',
+  'http://127.0.0.1:8889',
+  'http://127.0.0.1:2080',   # Nekoray
+  'http://127.0.0.1:8080'
+)
+
+function Test-Google { param($ProxyUrl)
+  try {
+    if ($ProxyUrl) {
+      Invoke-WebRequest 'https://www.google.com' -Proxy $ProxyUrl -TimeoutSec 8 -UseBasicParsing | Out-Null
+    } else {
+      Invoke-WebRequest 'https://www.google.com' -TimeoutSec 8 -UseBasicParsing | Out-Null
     }
+    return $true
+  } catch { return $false }
+}
+
+function Find-Proxy {
+  # 先看 IE/系统代理设置里写了什么（Clash 的「系统代理」开关就是改这里）
+  try {
+    $reg = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -ErrorAction Stop
+    if ($reg.ProxyEnable -eq 1 -and $reg.ProxyServer) {
+      $srv = $reg.ProxyServer
+      if ($srv -notmatch '://') { $srv = "http://$srv" }
+      if (Test-Google $srv) { return $srv }
+    }
+  } catch {}
+  foreach ($u in $script:ProxyCandidates) { if (Test-Google $u) { return $u } }
+  return ''
+}
+
+function Set-ProxyEnv {
+  $env:HTTP_PROXY  = $script:ProxyUrl; $env:http_proxy  = $script:ProxyUrl
+  $env:HTTPS_PROXY = $script:ProxyUrl; $env:https_proxy = $script:ProxyUrl
+  $env:NO_PROXY    = 'localhost,127.0.0.1,::1'; $env:no_proxy = $env:NO_PROXY
+  # PowerShell 的 Invoke-WebRequest 默认不读这些环境变量，要显式设默认代理
+  try { [Net.WebRequest]::DefaultWebProxy = New-Object Net.WebProxy($script:ProxyUrl, $true) } catch {}
+  Write-Log "proxy in use: $($script:ProxyUrl)"
+}
+
+function Setup-Proxy {
+  Step '检查能不能连上 Google'
+
+  # get.ps1 可能已经探到代理并传下来了。不先认领的话，下面的检测会因为
+  # 带着环境变量而成功，误判成「能直连」，代理就不会写进 OpenClaw 配置。
+  $inherited = if ($env:HTTPS_PROXY) { $env:HTTPS_PROXY } else { $env:https_proxy }
+  if ($inherited) {
+    $script:ProxyUrl = $inherited; Set-ProxyEnv
+    OK "沿用上一步探到的代理：$($script:ProxyUrl)"; return
   }
-  Write-Log "=== 安装开始 $(Get-Date) ==="
+
+  if (Test-Google $null) { OK '能直连，不需要代理'; return }
+
+  Warn '连不上 Google'
+  Say '  正在自动寻找你电脑上的代理软件…'
+  $found = Find-Proxy
+  if ($found) {
+    $script:ProxyUrl = $found; Set-ProxyEnv
+    OK "找到可用代理：$found"
+    Dlg @"
+检测到你在用代理软件，地址是：
+
+    $found
+
+我会让助手也走这个代理，这样它才能用上 Google 的 AI。
+
+（微信的消息不会绕到国外——代理软件会自己按规则分流，
+国内的网站和微信走直连。）
+"@
+    return
+  }
+
+  Dlg @"
+连不上 Google，而且没找到正在运行的代理软件。
+
+请先打开你的代理软件（Clash、v2rayN 这类），
+确认浏览器能打开 google.com，然后点「确定」继续。
+
+如果你的软件只开了 socks5 端口，需要在它的设置里
+把「HTTP 代理」也打开——这个助手只能用 HTTP 代理。
+"@
+  $found = Find-Proxy
+  if ($found) { $script:ProxyUrl = $found; Set-ProxyEnv; OK "找到了：$found"; return }
+
+  $manual = (AskText '还是没找到。请手动填写代理端口号（只填数字，在你代理软件的设置里能看到，常见的是 7890）：') -replace '\D',''
+  if ($manual) {
+    $u = "http://127.0.0.1:$manual"
+    if (Test-Google $u) { $script:ProxyUrl = $u; Set-ProxyEnv; OK "代理可用：$u"; return }
+    Warn "通过 127.0.0.1:$manual 还是连不上 Google"
+  }
+  Die '没有可用的网络。请先确保代理软件正常工作（浏览器能打开 google.com），再重新运行安装程序。'
+}
+
+# OpenClaw 装好之后把代理写进它自己的配置。
+# 必须写进 config——只设环境变量的话，后台服务重装时会丢。
+function Configure-OpenClawProxy {
+  if (-not $script:ProxyUrl) { return }
+  Step '让助手也走代理'
+  openclaw config set proxy.proxyUrl $script:ProxyUrl *>> $Log
+  if ($LASTEXITCODE -ne 0) { Warn '写入代理配置失败'; return }
+  # agy 是 Go 程序，会读 HTTPS_PROXY；写进服务的持久环境，
+  # 这样后台服务拉起 agy 的时候也能走代理。
+  $envf = Join-Path $env:USERPROFILE '.openclaw\.env'
+  New-Item -ItemType Directory -Force -Path (Split-Path $envf) | Out-Null
+  $keep = @()
+  if (Test-Path $envf) {
+    $keep = Get-Content $envf | Where-Object { $_ -notmatch '^(HTTPS?_PROXY|NO_PROXY)=' }
+  }
+  $keep += "HTTP_PROXY=$($script:ProxyUrl)"
+  $keep += "HTTPS_PROXY=$($script:ProxyUrl)"
+  $keep += 'NO_PROXY=localhost,127.0.0.1,::1'
+  $keep | Set-Content $envf -Encoding utf8
+  OK "助手的网络已指向 $($script:ProxyUrl)"
 }
 
 # ── 1. OpenClaw（助手的运行底座，自带 Node）──────────────────────────────
@@ -231,7 +350,8 @@ function Install-Agy {
 function Start-Gateway {
   Step '让助手开机自动运行'
   openclaw config set gateway.mode local *>> $Log
-  openclaw gateway install *>> $Log
+  if ($script:ProxyUrl) { openclaw gateway install --force *>> $Log }
+  else { openclaw gateway install *>> $Log }
   openclaw gateway restart *>> $Log
   Start-Sleep -Seconds 8
   if ((openclaw gateway status 2>$null | Out-String) -match 'running') {
@@ -312,6 +432,24 @@ function Verify {
     else { Warn '微信没连上'; $bad = 1 }
   if (Has 'agy') { OK 'Antigravity 可用' } else { Warn 'Antigravity 没装上（不影响聊天）' }
 
+  # 先单独验证到 Gemini 的通路。不这么做的话，代理没配通会表现成
+  # 「助手不回话」，使用者完全猜不到是网络问题。
+  $keyOut = (openclaw config get models.providers.google.apiKey 2>$null | Out-String)
+  $km = [regex]::Match($keyOut, 'AIza[A-Za-z0-9_\-]{20,}')
+  if ($km.Success) {
+    try {
+      Invoke-RestMethod -TimeoutSec 25 -UseBasicParsing `
+        -Uri "https://generativelanguage.googleapis.com/v1beta/models?key=$($km.Value)" | Out-Null
+      OK '能连上 Google 的 AI 服务'
+    } catch {
+      Warn '连不上 Google 的 AI 服务'; $bad = 1
+      if ($script:ProxyUrl) {
+        Dlg "助手装好了，但连不上 Google 的 AI 服务。`n`n这是网络问题，不是助手坏了。`n`n你的代理是：$($script:ProxyUrl)`n`n请检查：`n1. 代理软件还开着吗？`n2. 浏览器能打开 google.com 吗？`n`n代理软件重启后端口可能会变。端口变了的话，`n重新运行一次安装程序就会自动重新探测。"
+      } else {
+        Dlg "助手装好了，但连不上 Google 的 AI 服务。`n`n这是网络问题，不是助手坏了。`n`n如果你在中国大陆，需要先打开代理软件（Clash、v2rayN 这类），`n然后重新运行一次安装程序，它会自动探测并配置好。"
+      }
+    }
+  }
   Say ''
   Say '  正在让助手回一句话试试（可能要等十几秒）…'
   $reply = (openclaw agent --message '用一句话介绍你自己，不超过20个字' 2>&1 | Out-String).Trim()
@@ -322,7 +460,9 @@ function Verify {
 # ── main ─────────────────────────────────────────────────────────────────
 Banner
 Preflight
+Setup-Proxy
 Install-OpenClaw
+Configure-OpenClawProxy
 Install-WeChatPlugin
 Setup-GeminiKey
 Configure-Agent
