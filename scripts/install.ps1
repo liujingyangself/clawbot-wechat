@@ -279,7 +279,15 @@ function Install-WeChatPlugin {
 function Setup-GeminiKey {
   Step '配置备用通道（Google Gemini）'
   $existing = (openclaw config get models.providers.google.apiKey 2>$null | Out-String)
-  if ($existing -match '(AIza|AQ\.)[A-Za-z0-9_.\-]{20,}') { OK '已经配过密钥了'; return }
+  if ($existing -match '(AIza|AQ\.)[A-Za-z0-9_.\-]{20,}') {
+    OK '已经配过密钥了'
+    # 重跑时也要探一次。只认「配过」就跳过的话，等于在没验证的情况下配置模型——
+    # 密钥可能早就没额度了，而使用者要到发消息时才发现。
+    Say '  正在确认这把钥匙现在还能用…'
+    if (Probe-AnyModel $matches[0]) { OK "可用模型：$($script:PickedModel)" }
+    else { Warn '这把钥匙目前没有可用额度（多半是今天的免费次数用完了）' }
+    return
+  }
 
   Dlg @"
 接下来拿一把「钥匙」，作为助手的备用通道。
