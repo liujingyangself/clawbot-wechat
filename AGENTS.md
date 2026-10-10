@@ -162,7 +162,12 @@ openclaw agent --message "你好"     # 应该有回话
 
 - **`openclaw config set ... model.primary` 报 `Unknown model`**：OpenClaw 自己的模型目录
   常常只认一两个 google 模型，`flash-lite` 往往不在里面，`models list --refresh` 也补不上。
-  解法是先把模型显式声明进 `models.providers.google.models[]`，再设 primary。安装器已经这么做了。
+  解法是先把模型显式声明进 `models.providers.google.models[]`，再设 primary。
+- **声明了模型之后反而每次调用都失败**：给 `google` 加上 `models` 数组会让 OpenClaw
+  把它当成自定义 provider，接口格式回落成 OpenAI 的，日志里能看到
+  `[responses] error provider=google api=openai-responses`。
+  **必须同时设 `models.providers.google.api = "google-generative-ai"`。**
+  这两件事要一起做，少一个都跑不通。安装器已经这么做了。
 
 - **`openclaw` 装完找不到命令**：PATH 没刷新。macOS 新开一个终端窗口；
   Windows 用 `Refresh-Path`（脚本里有这个函数）或重开 PowerShell。

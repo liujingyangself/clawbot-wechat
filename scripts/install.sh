@@ -374,8 +374,13 @@ configure_agent() {
   log "chosen model: $m"
   # OpenClaw 自己的模型目录常常只认一两个 google 模型，lite 往往不在里面，
   # 直接 set primary 会报 Unknown model。所以先把它显式声明进 provider。
+  # 两件事必须一起做：
+  #  · 声明模型 —— OpenClaw 的目录里往往没有 lite，不声明会报 Unknown model
+  #  · 指定 api  —— 一旦给 google 加了 models 数组，OpenClaw 会把它当成自定义
+  #    provider，接口格式回落成 openai-responses，于是每次调用都失败
+  #    （日志里会看到 `api=openai-responses model=...`）
   openclaw config set models.providers.google \
-    "{\"models\":[{\"id\":\"$m\",\"input\":[\"text\"],\"contextWindow\":1000000,\"contextTokens\":200000,\"maxTokens\":8192,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0}}]}" \
+    "{\"api\":\"google-generative-ai\",\"models\":[{\"id\":\"$m\",\"input\":[\"text\"],\"contextWindow\":1000000,\"contextTokens\":200000,\"maxTokens\":8192,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0}}]}" \
     --strict-json --merge >>"$LOG" 2>&1 || true
   openclaw config set agents.defaults.model.primary "google/$m" >>"$LOG" 2>&1 || true
   openclaw config set memory.search.enabled false >>"$LOG" 2>&1 || true
