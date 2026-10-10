@@ -1,0 +1,120 @@
+# 微信 AI 助手（ClawBot）
+
+把一个 AI 助手装进你的微信。装完之后，你在微信里发消息，它就会回你——
+能聊天、能查东西、能帮你写代码改文件，还能画图（画图要单独开通，见下文）。
+
+---
+
+## 怎么安装
+
+### 最简单：复制一行，粘进去回车
+
+**Mac** —— 打开「终端」App（按 `Command + 空格`，输入「终端」回车），粘这条：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/liujingyangself/clawbot-wechat/main/get.sh | bash
+```
+
+**Windows** —— 在开始菜单搜索「PowerShell」打开，粘这条：
+
+```powershell
+irm https://raw.githubusercontent.com/liujingyangself/clawbot-wechat/main/get.ps1 | iex
+```
+
+就这一条。它会自动下载、安装、然后在需要你帮忙的时候弹窗提醒。
+
+### 或者：让 AI 帮你装
+
+如果你电脑上有 Antigravity、Claude、Cursor 这类 AI 助手，直接跟它说：
+
+> 帮我安装 https://github.com/liujingyangself/clawbot-wechat
+
+它会自己读懂怎么装。
+
+### 或者：下载压缩包双击
+
+[下载 ZIP](https://github.com/liujingyangself/clawbot-wechat/archive/refs/heads/main.zip)，
+解压之后：
+
+- **Mac** 双击 `安装-Mac.command`
+  （第一次会提示「无法验证开发者」→ 右键点它 → 选「打开」→ 再点一次「打开」）
+- **Windows** 双击 `安装-Windows.bat`
+
+---
+
+## 安装过程中你需要做三件事
+
+安装器会在需要你帮忙的时候**弹窗提醒你**，不用一直盯着。
+
+| 第几步 | 你要做什么 | 大概多久 |
+|---|---|---|
+| 1 | 用**手机微信扫一个二维码**（就像登录网页版微信那样） | 半分钟 |
+| 2 | 在浏览器里**用 Google 账号登录**一次 | 一分钟 |
+| 3 | 去一个网页**复制一串密钥**贴回来（有详细图文指引） | 两分钟 |
+
+全程大约 10-20 分钟，大部分时间是电脑自己在下载东西，你可以去干别的。
+
+---
+
+## 装完怎么用
+
+在微信里给自己发消息（或者找到那个助手的会话），直接说话就行：
+
+```
+今天东京天气怎么样
+把桌面上那个 report.txt 的前三行念给我听
+帮我在 ~/Desktop/test 下建个 Python 脚本，打印 1 到 100 的质数
+```
+
+**常用命令**（在微信里直接发）：
+
+| 发这个 | 作用 |
+|---|---|
+| `/help` | 看能干什么 |
+| `画一只戴帽子的柴犬` | 画图（需要先开通，见下文） |
+| `状态` | 看看助手还活着没 |
+
+---
+
+## 关于画图
+
+画图**需要付费**，因为 Google 对图像生成没有免费额度（约 1 元人民币一张）。
+
+- 安装时会问你要不要开通，**选「跳过」完全不影响其他功能**
+- 以后想加上：安装程序会把文件放在你的用户文件夹下的 `clawbot-wechat` 里，
+  进去 `scripts` 文件夹，Mac 双击 `添加绘画-Mac.command`，Windows 双击 `添加绘画-Windows.bat`
+
+---
+
+## 出问题了怎么办
+
+看 [`docs/常见问题.md`](docs/常见问题.md)。
+
+里面覆盖了：助手不回消息、二维码扫不上、提示没装 Node、画图报错、怎么卸载干净。
+
+---
+
+## 这东西安全吗
+
+几条你应该知道的：
+
+1. **只有你能用它。** 陌生人给你发消息，助手不会理，除非你明确批准。
+2. **它改不了重要文件。** 默认只允许它在你的「文稿」和「桌面」里干活，碰不到系统设置、
+   密码、SSH 密钥这些。
+3. **群里它不说话。** 默认在群聊里完全沉默，避免打扰别人。
+4. **别让它帮你群发。** 这违反微信的使用条款，可能导致封号。
+
+
+---
+
+## 给 AI 代理
+
+如果你是一个被要求「安装这个项目」的 AI 助手，完整说明在
+[`AGENTS.md`](AGENTS.md)。简版：
+
+| 系统 | 跑这条 |
+|---|---|
+| macOS / Linux | `curl -fsSL https://raw.githubusercontent.com/liujingyangself/clawbot-wechat/main/get.sh \| bash` |
+| Windows | `irm https://raw.githubusercontent.com/liujingyangself/clawbot-wechat/main/get.ps1 \| iex` |
+
+必须在**前台终端**跑（要扫二维码、要键盘输入）。脚本是幂等的，中断了直接重跑。
