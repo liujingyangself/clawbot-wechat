@@ -448,6 +448,16 @@ configure_agent() {
   # 消息，agent 轮次照跑，额度照花。
   openclaw config set agents.defaults.heartbeat.every '"0m"' >>"$LOG" 2>&1 || true
   openclaw config set memory.search.enabled false >>"$LOG" 2>&1 || true
+  # 关掉「后台命令跑完自动发消息」。它会额外起一次 agent 轮次，
+  # 既花额度，又会让使用者莫名收到一条没头没尾的消息。
+  openclaw config set tools.exec.notifyOnExit false >>"$LOG" 2>&1 || true
+  # 关掉「记忆梦境」这个每天凌晨跑的定时任务（同样是白花额度的模型调用）。
+  # 它没有对应的配置项，只能按名字找到任务再禁用。
+  openclaw cron list --all 2>/dev/null | grep -i "Memory Dreaming" | \
+    grep -oE '^[0-9a-f-]{36}' | while read -r _jid; do
+      openclaw cron disable "$_jid" >>"$LOG" 2>&1 || true
+    done
+
 
   # 只有本人能用；群里不说话
   openclaw config set channels.openclaw-weixin \

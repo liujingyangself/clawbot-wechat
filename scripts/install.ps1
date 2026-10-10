@@ -463,6 +463,20 @@ function Configure-Agent {
   # 消息，agent 轮次照跑，额度照花。
   openclaw config set agents.defaults.heartbeat.every '"0m"' *>> $Log
   openclaw config set memory.search.enabled false *>> $Log
+  # 关掉「后台命令跑完自动发消息」。它会额外起一次 agent 轮次，
+  # 既花额度，又会让使用者莫名收到一条没头没尾的消息。
+  openclaw config set tools.exec.notifyOnExit false *>> $Log
+  # 关掉「记忆梦境」这个每天凌晨跑的定时任务（同样是白花额度的模型调用）。
+  # 它没有对应的配置项，只能按名字找到任务再禁用。
+  try {
+    $rows = (openclaw cron list --all 2>$null | Out-String) -split "`n"
+    foreach ($row in $rows) {
+      if ($row -match '^([0-9a-f-]{36})\s' -and $row -match 'Memory Dreaming') {
+        openclaw cron disable $Matches[1] *>> $Log
+      }
+    }
+  } catch {}
+
   openclaw config set channels.openclaw-weixin '{"dmPolicy":"pairing","groupPolicy":"allowlist"}' --strict-json --merge *>> $Log
   openclaw config set tools.exec.mode auto *>> $Log
 
