@@ -172,7 +172,7 @@ openclaw agent --message "你好"     # 应该有回话
   中文 Windows 默认使用 GBK/CP936 代码页解析无 BOM 的 `.ps1` 文件，多字节汉字会破坏引号与花括号闭合。
   **仓库中所有 `.ps1` 脚本必须严格保存为带 BOM 的 UTF-8（UTF-8 with BOM）**。
 - **Google API Key 前缀不仅是 `AIza`**：
-  Google AI Studio 最新生成的 API Key 采用 `AQ.` 开头（如 `AQ.AbXXXXXXXX...`），必须同时放行 `AIza` 和 `AQ.` 前缀。
+  Google AI Studio 最新生成的 API Key 采用 `AQ.` 开头（如 `AQ.AbXXXXXXXX…（示例，不是真的）`），必须同时放行 `AIza` 和 `AQ.` 前缀。
 - **微信二维码在 AI 代理环境中不可见或已过期**：
   在代理环境中，终端标准输出被捕获，使用者看不到 ASCII 二维码。你可以提取命令输出中的登录直链（`https://liteapp.weixin.qq.com/q/...`）提供给使用者在手机微信中直接打开，或者告知使用者直接双击根目录下的 `扫码登录-Windows.bat`（Mac 为 `扫码登录-Mac.command`）弹出独立窗口扫码。
 - **Windows 上服务权限错位**：
