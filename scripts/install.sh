@@ -26,7 +26,34 @@ die()  { printf '%s  ✗ %s%s\n' "$R" "$*" "$N"; log "FAIL: $*"
 # 弹窗可能被别的窗口挡住、可能在非交互环境下根本不显示，
 # 如果它是唯一的渠道，使用者就会对着一个没反应的窗口发呆。
 INTERACTIVE=1
+REAL_CONSOLE=1
 [[ -t 0 ]] || INTERACTIVE=0
+# 输出被捕获时，二维码这类「画在屏幕上」的东西使用者根本看不到——
+# 它们会进到调用方（比如 AI 代理）的缓冲区里。
+[[ -t 1 && -t 0 ]] || REAL_CONSOLE=0
+
+# 二维码、agy 的登录界面这些必须真人盯着屏幕看。输出被捕获时直接停下来，
+# 告诉使用者怎么自己跑，而不是把二维码画进一个没人看的管道里。
+require_real_console() {  # require_real_console <这一步叫什么> <让他自己跑的命令>
+  (( REAL_CONSOLE )) && return 0
+  printf '\n%s%s%s\n' "$R" "$(printf '═%.0s' $(seq 1 60))" "$N"
+  printf '%s  这一步（%s）必须由你本人在终端窗口里完成%s\n' "$R$B" "$1" "$N"
+  printf '%s%s%s\n\n' "$R" "$(printf '═%.0s' $(seq 1 60))" "$N"
+  echo "  检测到这个脚本的输出被程序捕获了（多半是 AI 助手在代跑）。"
+  echo "  二维码画出来你也看不到，所以先停在这里。"
+  echo
+  printf '%s  请你本人这样做：%s\n' "$Y" "$N"
+  echo "    1. 打开「终端」App（Command + 空格，输入「终端」回车）"
+  echo "    2. 把下面这行粘进去，回车："
+  echo
+  printf '%s       %s%s\n' "$G" "$2" "$N"
+  echo
+  echo "    3. 照屏幕提示完成"
+  echo "    4. 完成后重新运行一次安装程序，它会接着往下走"
+  echo
+  log "HALT: $1 needs a real console"
+  exit 2
+}
 
 esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 
@@ -403,6 +430,7 @@ install_agy() {
      && grep -q '"permissions"' "$HOME/.gemini/antigravity-cli/settings.json" 2>/dev/null; then
     ok "已经登录并配置过了"
   else
+    require_real_console "Antigravity 登录" 'export PATH="$HOME/.local/bin:$PATH"; agy'
     dialog "马上要让 Antigravity 登录你的 Google 账号。
 
 点「知道了」之后，窗口里会出现一个设置界面，请这样操作：
@@ -464,6 +492,7 @@ login_wechat() {
   if openclaw channels status 2>/dev/null | grep -q "openclaw-weixin.*running"; then
     ok "微信已经连上了"; return
   fi
+  require_real_console "微信扫码" 'export PATH="$HOME/.local/bin:$PATH"; openclaw channels login --channel openclaw-weixin'
   dialog "最后一步：连接微信。
 
 点「知道了」之后，这个窗口里会出现一个二维码。

@@ -34,9 +34,41 @@ function Die   { param($m)
 
 # 判断有没有可用的交互桌面。被 AI 代理或 CI 以重定向方式调起时为 false。
 $script:Interactive = $true
+$script:RealConsole = $true
 try {
   if ([Console]::IsInputRedirected -or $Host.Name -eq 'Default Host') { $script:Interactive = $false }
-} catch { $script:Interactive = $false }
+  # 输出被捕获时，二维码这类「画在屏幕上」的东西使用者根本看不到——
+  # 它们会进到调用方（比如 AI 代理）的缓冲区里。
+  if ([Console]::IsOutputRedirected -or [Console]::IsInputRedirected) { $script:RealConsole = $false }
+  if ($env:TERM_PROGRAM -eq 'vscode' -and -not [Console]::IsOutputRedirected) { $script:RealConsole = $true }
+} catch { $script:Interactive = $false; $script:RealConsole = $false }
+
+# 二维码、agy 的登录界面这些必须真人盯着屏幕看。输出被捕获时直接停下来，
+# 告诉使用者怎么自己跑，而不是把二维码画进一个没人看的管道里。
+function Require-RealConsole { param($what)
+  if ($script:RealConsole) { return }
+  Write-Host ''
+  Write-Host ('═' * 64) -Fore Red
+  Write-Host "  这一步（$what）必须由你本人在终端窗口里完成" -Fore Red
+  Write-Host ('═' * 64) -Fore Red
+  Write-Host ''
+  Write-Host '  检测到这个脚本的输出被程序捕获了（多半是 AI 助手在代跑）。'
+  Write-Host '  二维码画出来你也看不到，所以先停在这里。'
+  Write-Host ''
+  Write-Host '  请你本人这样做：' -Fore Yellow
+  Write-Host '    1. 在开始菜单搜索「PowerShell」，打开它'
+  Write-Host '    2. 把下面这两行粘进去，回车：'
+  Write-Host ''
+  Write-Host "       `$env:Path = [Environment]::GetEnvironmentVariable('Path','User') + ';' + `$env:Path" -Fore Cyan
+  Write-Host '       openclaw channels login --channel openclaw-weixin' -Fore Cyan
+  Write-Host ''
+  Write-Host '    3. 用手机微信扫出现的二维码'
+  Write-Host '    4. 扫完回来重新运行一次安装程序，它会接着往下走'
+  Write-Host ''
+  Write-Log "HALT: $what needs a real console"
+  Read-Host '  按回车关闭'
+  exit 2
+}
 
 # MessageBox 不指定父窗口会被丢到别的窗口后面。用一个置顶的隐形窗口当 owner。
 function New-TopmostOwner {
@@ -380,6 +412,7 @@ function Install-Agy {
   if ((Test-Path $settings) -and ((Get-Content $settings -Raw) -match '"permissions"')) {
     OK '已经登录并配置过了'
   } else {
+    Require-RealConsole 'Antigravity 登录'
     Dlg @"
 马上要让 Antigravity 登录你的 Google 账号。
 
@@ -438,6 +471,7 @@ function Login-WeChat {
   if ((openclaw channels status 2>$null | Out-String) -match 'openclaw-weixin.*running') {
     OK '微信已经连上了'; return
   }
+  Require-RealConsole '微信扫码'
   Dlg @"
 最后一步：连接微信。
 
